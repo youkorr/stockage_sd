@@ -4,7 +4,7 @@ from esphome.const import CONF_ID, CONF_PLATFORM, CONF_WEB_SERVER
 from esphome.components import web_server_base, audio
 
 DEPENDENCIES = ['media_player', 'web_server_base', 'audio', 'sd_mmc_card'] #Add sd_mmc_card dependency
-CODEOWNERS = ["@votre_nom"]
+CODEOWNERS = ["@youkorr"]
 
 CONF_STORAGE = "storage"
 CONF_FILES = "files"
