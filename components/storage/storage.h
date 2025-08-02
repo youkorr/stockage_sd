@@ -38,18 +38,17 @@ class StorageFile : public audio::AudioFile, public Component {
   void set_sd_component(sd_mmc_card::SdMmc *sd_component) { sd_component_ = sd_component; }
   bool is_sd_direct() const { return platform_ == "sd_direct"; }
   
-  // NOUVEAU: Stream direct depuis SD sans buffer RAM
+  // NOUVEAU: Stream direct depuis SD sans buffer RAM - utilise vos méthodes existantes
   void stream_direct(std::function<void(const uint8_t*, size_t)> callback);
   void stream_chunked_direct(std::function<void(const uint8_t*, size_t)> callback);
   
-  // NOUVEAU: Lecture zero-copy pour audio
+  // NOUVEAU: Lecture directe compatible avec votre SdMmc
+  std::vector<uint8_t> read_direct();
   bool read_audio_chunk(size_t offset, uint8_t* buffer, size_t buffer_size, size_t& bytes_read);
   
-  // NOUVEAU: Override des méthodes AudioFile pour bypass
-  size_t get_file_size() const override;
-  bool seek(size_t position) override;
-  size_t read(uint8_t* buffer, size_t length) override;
-  bool is_eof() const override;
+  // NOUVEAU: Helpers pour info fichier
+  size_t get_file_size_direct() const;  // Pas override - nouvelle méthode
+  bool file_exists_direct() const;
 
  private:
   std::string path_;
@@ -60,9 +59,9 @@ class StorageFile : public audio::AudioFile, public Component {
   
   // NOUVEAU: Pour le bypass SD
   sd_mmc_card::SdMmc *sd_component_{nullptr};
-  size_t current_position_{0};
-  size_t file_size_{0};
-  bool file_size_cached_{false};
+  mutable size_t current_position_{0};
+  mutable size_t cached_file_size_{0};
+  mutable bool file_size_cached_{false};
 };
 
 class StorageComponent : public Component {
@@ -87,8 +86,9 @@ class StorageComponent : public Component {
   // NOUVEAU: Bypass global pour ESPHome
   void enable_global_bypass(bool enable) { global_bypass_enabled_ = enable; }
   bool is_global_bypass_enabled() const { return global_bypass_enabled_; }
+  void set_cache_size(size_t cache_size) { cache_size_ = cache_size; }
   
-  // NOUVEAU: Méthodes de bypass
+  // NOUVEAU: Méthodes de bypass - utilise vos méthodes SdMmc existantes
   StorageFile* get_file_by_path(const std::string &path);
   std::vector<uint8_t> read_file_direct(const std::string &path);
   bool file_exists_direct(const std::string &path);
@@ -111,6 +111,7 @@ class StorageComponent : public Component {
   // NOUVEAU: Pour le bypass
   sd_mmc_card::SdMmc *sd_component_{nullptr};
   bool global_bypass_enabled_{false};
+  size_t cache_size_{0};
 };
 
 // NOUVEAU: Classe pour hooks globaux ESPHome
@@ -120,12 +121,6 @@ class StorageGlobalHooks {
   static std::vector<uint8_t> intercept_file_read(const std::string &path);
   static bool intercept_file_exists(const std::string &path);
   static void intercept_file_stream(const std::string &path, std::function<void(const uint8_t*, size_t)> callback);
-  
-  // Hook pour media_player
-  static bool hook_media_player_file(const std::string &media_url, std::function<void(const uint8_t*, size_t)> callback);
-  
-  // Hook pour display/images
-  static bool hook_image_file(const std::string &image_path, std::function<void(const uint8_t*, size_t)> callback);
 };
 
 }  // namespace storage
