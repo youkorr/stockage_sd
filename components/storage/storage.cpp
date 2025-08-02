@@ -10,7 +10,7 @@ static const char *const TAG = "storage";
 StorageComponent* StorageComponent::global_instance_ = nullptr;
 
 // ===========================================
-// Implémentation StorageFile avec bypass SD
+// Implémentation StorageFile avec votre SdMmc existant
 // ===========================================
 
 void StorageFile::stream_direct(std::function<void(const uint8_t*, size_t)> callback) {
@@ -20,7 +20,9 @@ void StorageFile::stream_direct(std::function<void(const uint8_t*, size_t)> call
   }
   
   ESP_LOGD(TAG, "Streaming file %s directly from SD", path_.c_str());
-  sd_component_->stream_file_direct_chunked(path_, chunk_size_, callback);
+  
+  // Utilise votre méthode read_file_stream existante
+  sd_component_->read_file_stream(path_.c_str(), 0, chunk_size_, callback);
 }
 
 void StorageFile::stream_chunked_direct(std::function<void(const uint8_t*, size_t)> callback) {
@@ -29,8 +31,34 @@ void StorageFile::stream_chunked_direct(std::function<void(const uint8_t*, size_
     return;
   }
   
-  // Stream avec la taille de chunk configurée
-  sd_component_->read_file_stream(path_.c_str(), 0, chunk_size_, callback);
+  // Stream par chunks en utilisant votre méthode read_file_chunked existante
+  size_t offset = 0;
+  size_t file_size = get_file_size_direct();
+  
+  ESP_LOGD(TAG, "Streaming file %s in chunks of %u bytes", path_.c_str(), chunk_size_);
+  
+  while (offset < file_size) {
+    size_t current_chunk = std::min((size_t)chunk_size_, file_size - offset);
+    auto chunk_data = sd_component_->read_file_chunked(path_, offset, current_chunk);
+    
+    if (chunk_data.empty()) {
+      ESP_LOGE(TAG, "Failed to read chunk at offset %zu", offset);
+      break;
+    }
+    
+    // Callback direct - pas de stockage en RAM
+    callback(chunk_data.data(), chunk_data.size());
+    offset += current_chunk;
+  }
+}
+
+std::vector<uint8_t> StorageFile::read_direct() {
+  if (!is_sd_direct() || !sd_component_) {
+    return {};
+  }
+  
+  ESP_LOGD(TAG, "Reading file %s directly from SD", path_.c_str());
+  return sd_component_->read_file(path_);
 }
 
 bool StorageFile::read_audio_chunk(size_t offset, uint8_t* buffer, size_t buffer_size, size_t& bytes_read) {
@@ -38,7 +66,7 @@ bool StorageFile::read_audio_chunk(size_t offset, uint8_t* buffer, size_t buffer
     return false;
   }
   
-  // Lecture directe chunk par chunk pour audio
+  // Lecture directe chunk par chunk pour audio en utilisant votre méthode existante
   auto chunk_data = sd_component_->read_file_chunked(path_, offset, buffer_size);
   bytes_read = chunk_data.size();
   
@@ -51,41 +79,24 @@ bool StorageFile::read_audio_chunk(size_t offset, uint8_t* buffer, size_t buffer
   return false;
 }
 
-// Override des méthodes AudioFile pour bypass complet
-size_t StorageFile::get_file_size() const {
+size_t StorageFile::get_file_size_direct() const {
   if (!file_size_cached_) {
     if (is_sd_direct() && sd_component_) {
-      file_size_ = sd_component_->file_size(path_);
+      cached_file_size_ = sd_component_->file_size(path_);
     } else {
-      file_size_ = 0;
+      cached_file_size_ = 0;
     }
     file_size_cached_ = true;
   }
-  return file_size_;
+  return cached_file_size_;
 }
 
-bool StorageFile::seek(size_t position) {
-  if (position <= get_file_size()) {
-    current_position_ = position;
-    return true;
-  }
-  return false;
-}
-
-size_t StorageFile::read(uint8_t* buffer, size_t length) {
+bool StorageFile::file_exists_direct() const {
   if (!is_sd_direct() || !sd_component_) {
-    return 0;
+    return false;
   }
   
-  size_t bytes_read = 0;
-  if (read_audio_chunk(current_position_, buffer, length, bytes_read)) {
-    return bytes_read;
-  }
-  return 0;
-}
-
-bool StorageFile::is_eof() const {
-  return current_position_ >= get_file_size();
+  return sd_component_->file_size(path_) > 0;
 }
 
 // ===========================================
@@ -187,7 +198,9 @@ void StorageComponent::stream_file_direct(const std::string &path, std::function
   }
   
   ESP_LOGD(TAG, "Streaming file %s directly from SD", path.c_str());
-  sd_component_->stream_file_direct(path, callback);
+  
+  // Utilise votre méthode read_file_stream existante
+  sd_component_->read_file_stream(path.c_str(), 0, 1024, callback);
 }
 
 // ===========================================
@@ -214,34 +227,6 @@ void StorageGlobalHooks::intercept_file_stream(const std::string &path, std::fun
   if (!storage) return;
   
   storage->stream_file_direct(path, callback);
-}
-
-bool StorageGlobalHooks::hook_media_player_file(const std::string &media_url, std::function<void(const uint8_t*, size_t)> callback) {
-  auto *storage = StorageComponent::get_global_instance();
-  if (!storage || !storage->is_global_bypass_enabled()) {
-    return false;
-  }
-  
-  // Extraire le chemin du fichier de l'URL
-  std::string file_path = media_url;
-  if (media_url.find("file://") == 0) {
-    file_path = media_url.substr(7); // Enlever "file://"
-  }
-  
-  ESP_LOGI(TAG, "Hooking media player file: %s", file_path.c_str());
-  storage->stream_file_direct(file_path, callback);
-  return true;
-}
-
-bool StorageGlobalHooks::hook_image_file(const std::string &image_path, std::function<void(const uint8_t*, size_t)> callback) {
-  auto *storage = StorageComponent::get_global_instance();
-  if (!storage || !storage->is_global_bypass_enabled()) {
-    return false;
-  }
-  
-  ESP_LOGI(TAG, "Hooking image file: %s", image_path.c_str());
-  storage->stream_file_direct(image_path, callback);
-  return true;
 }
 
 }  // namespace storage
