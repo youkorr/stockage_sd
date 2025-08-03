@@ -281,12 +281,21 @@ class StorageHTTPInterceptor {
   }
   
   static String get_mime_type(const String &path) {
-    if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
-    if (path.endsWith(".png")) return "image/png";
-    if (path.endsWith(".gif")) return "image/gif";
-    if (path.endsWith(".bmp")) return "image/bmp";
-    if (path.endsWith(".webp")) return "image/webp";
-    if (path.endsWith(".svg")) return "image/svg+xml";
+    // Utiliser une approche compatible avec std::string
+    std::string path_str = path.c_str();
+    
+    // Fonction helper pour vérifier l'extension
+    auto has_extension = [&path_str](const std::string& ext) {
+      if (path_str.length() < ext.length()) return false;
+      return path_str.compare(path_str.length() - ext.length(), ext.length(), ext) == 0;
+    };
+    
+    if (has_extension(".jpg") || has_extension(".jpeg")) return "image/jpeg";
+    if (has_extension(".png")) return "image/png";
+    if (has_extension(".gif")) return "image/gif";
+    if (has_extension(".bmp")) return "image/bmp";
+    if (has_extension(".webp")) return "image/webp";
+    if (has_extension(".svg")) return "image/svg+xml";
     return "application/octet-stream";
   }
 };
