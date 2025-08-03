@@ -4,7 +4,7 @@
 #include "esphome/core/automation.h"
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
-#include "esphome/components/sd_mmc_card/sd_mmc_card.h"
+#include "../sd_mmc_card/sd_mmc_card.h"
 
 #include <vector>
 #include <string>
