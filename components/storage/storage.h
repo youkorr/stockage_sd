@@ -3,6 +3,7 @@
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/log.h"
+#include "esphome/core/hal.h"
 #include "../sd_mmc_card/sd_mmc_card.h"
 
 #include <vector>
@@ -14,7 +15,8 @@
 namespace esphome {
 namespace storage {
 
-static const char *const TAG = "storage";
+// Forward declarations
+class StorageActionFactory;
 
 // Structure pour configuration des fichiers
 struct FileConfig {
@@ -49,7 +51,7 @@ class StorageComponent : public Component {
   
   // Configuration
   void set_platform(const std::string &platform) { platform_name_ = platform; }
-  void set_sd_component(sd_mmc_card::SDMMCCard *sd_card) { sd_card_ = sd_card; }
+  void set_sd_component(esphome::sd_mmc_card::SDMMCCard *sd_card) { sd_card_ = sd_card; }
   void set_enable_global_bypass(bool enable) { enable_global_bypass_ = enable; }
   void set_cache_size(size_t size) { cache_size_ = size; }
   void set_auto_http_intercept(bool enable) { auto_http_intercept_ = enable; }
@@ -87,7 +89,7 @@ class StorageComponent : public Component {
  protected:
   // Configuration
   std::string platform_name_{"sd_direct"};
-  sd_mmc_card::SDMMCCard *sd_card_{nullptr};
+  esphome::sd_mmc_card::SDMMCCard *sd_card_{nullptr};
   bool enable_global_bypass_{false};
   size_t cache_size_{32768};
   bool auto_http_intercept_{false};
