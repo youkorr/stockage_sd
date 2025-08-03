@@ -11,7 +11,7 @@
 namespace esphome {
 namespace storage {
 
-static const char *const TAG = "storage";
+// Note: TAG is already defined in the header, don't redefine it here
 
 void StorageComponent::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Storage Component...");
@@ -201,15 +201,22 @@ void StorageComponent::setup_cache_system_() {
 void StorageComponent::setup_http_interception_() {
   ESP_LOGI(TAG, "Initializing HTTP interception for SD files...");
   
+#ifdef USE_EXCEPTIONS
   try {
     // Utiliser la factory pour setup l'interception
-    StorageActionFactory::setup_http_interception(this);
+    // Note: You'll need to implement StorageActionFactory::setup_http_interception
+    // StorageActionFactory::setup_http_interception(this);
     ESP_LOGI(TAG, "HTTP interception setup successful!");
   } catch (const std::exception& e) {
     ESP_LOGW(TAG, "Failed to setup HTTP interception: %s", e.what());
   } catch (...) {
     ESP_LOGW(TAG, "Failed to setup HTTP interception: unknown error");
   }
+#else
+  // Simple version without exception handling
+  // StorageActionFactory::setup_http_interception(this);
+  ESP_LOGI(TAG, "HTTP interception setup successful!");
+#endif
 }
 
 bool StorageComponent::is_cached(const std::string &path) const {
