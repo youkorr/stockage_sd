@@ -6,7 +6,7 @@
 #include "esphome/core/application.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 #include "storage.h"
-#include "esp_netif.h"
+
 
 namespace esphome {
 namespace storage {
