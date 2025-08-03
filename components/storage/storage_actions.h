@@ -2,6 +2,7 @@
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "storage.h"
+#include "../sd_mmc_card/sd_mmc_card.h"
 
 namespace esphome {
 namespace storage {
