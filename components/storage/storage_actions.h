@@ -1,8 +1,10 @@
-// storage_actions.h - Actions pour automatisation avec bypass SD
+// storage_actions.h - Actions pour automatisation avec bypass SD et interception HTTP
 
 #pragma once
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
+#include "esphome/core/application.h"
+#include "esphome/components/web_server_base/web_server_base.h"
 #include "storage.h"
 
 namespace esphome {
@@ -155,6 +157,140 @@ class StorageFileExistsAction : public Action<Ts...> {
   std::function<void(bool)> exists_callback_;
 };
 
+// NOUVEAU: Intercepteur HTTP automatique pour ESPHome
+class StorageHTTPInterceptor {
+ public:
+  static void setup_automatic_interception(StorageComponent *storage) {
+    ESP_LOGI("storage_interceptor", "Setting up automatic HTTP interception for ESPHome images");
+    
+    // Obtenir le serveur web d'ESPHome
+    auto *web_server = App.get_web_server();
+    if (!web_server) {
+      ESP_LOGW("storage_interceptor", "No web server found, creating one");
+      // ESPHome créera automatiquement un serveur web si nécessaire
+      return;
+    }
+    
+    install_localhost_handlers(storage, web_server);
+    install_image_handlers(storage, web_server);
+  }
+  
+ private:
+  static void install_localhost_handlers(StorageComponent *storage, web_server_base::WebServerBase *web_server) {
+    // Intercepter toutes les requêtes localhost pour images
+    web_server->add_handler("/img/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+      handle_image_request(storage, request, "/scard/img");
+    });
+    
+    web_server->add_handler("/sd/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+      handle_image_request(storage, request, "/scard");
+    });
+    
+    web_server->add_handler("/scard/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+      handle_image_request(storage, request, "");
+    });
+  }
+  
+  static void install_image_handlers(StorageComponent *storage, web_server_base::WebServerBase *web_server) {
+    // Handler générique pour tous les fichiers images
+    web_server->add_handler("*.jpg", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+      handle_any_image_request(storage, request);
+    });
+    
+    web_server->add_handler("*.jpeg", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+      handle_any_image_request(storage, request);
+    });
+    
+    web_server->add_handler("*.png", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+      handle_any_image_request(storage, request);
+    });
+    
+    web_server->add_handler("*.bmp", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+      handle_any_image_request(storage, request);
+    });
+    
+    web_server->add_handler("*.gif", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+      handle_any_image_request(storage, request);
+    });
+  }
+  
+  static void handle_image_request(StorageComponent *storage, AsyncWebServerRequest *request, const String &base_path) {
+    String url_path = request->url();
+    String full_path = base_path + url_path;
+    
+    ESP_LOGD("storage_interceptor", "Image request: %s -> %s", url_path.c_str(), full_path.c_str());
+    
+    serve_file_from_sd(storage, request, full_path);
+  }
+  
+  static void handle_any_image_request(StorageComponent *storage, AsyncWebServerRequest *request) {
+    String url_path = request->url();
+    
+    // Essayer plusieurs emplacements possibles
+    std::vector<String> possible_paths = {
+      "/scard" + url_path,
+      "/scard/img" + url_path,
+      "/scard/images" + url_path
+    };
+    
+    for (const auto &path : possible_paths) {
+      if (storage->file_exists_direct(path.c_str())) {
+        ESP_LOGD("storage_interceptor", "Found image at: %s", path.c_str());
+        serve_file_from_sd(storage, request, path);
+        return;
+      }
+    }
+    
+    ESP_LOGW("storage_interceptor", "Image not found: %s", url_path.c_str());
+    request->send(404, "text/plain", "Image not found on SD card");
+  }
+  
+  static void serve_file_from_sd(StorageComponent *storage, AsyncWebServerRequest *request, const String &file_path) {
+    if (!storage->file_exists_direct(file_path.c_str())) {
+      request->send(404, "text/plain", "File not found");
+      return;
+    }
+    
+    // Lire le fichier depuis SD
+    auto file_data = storage->read_file_direct(file_path.c_str());
+    if (file_data.empty()) {
+      request->send(500, "text/plain", "Failed to read file from SD");
+      return;
+    }
+    
+    // Déterminer le type MIME
+    String content_type = get_mime_type(file_path);
+    
+    // Créer la réponse
+    AsyncWebServerResponse *response = request->beginResponse_P(
+      200, 
+      content_type.c_str(), 
+      (const uint8_t*)file_data.data(), 
+      file_data.size()
+    );
+    
+    // Headers d'optimisation
+    response->addHeader("Cache-Control", "public, max-age=3600");
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Content-Length", String(file_data.size()));
+    
+    request->send(response);
+    
+    ESP_LOGD("storage_interceptor", "Served: %s (%zu bytes, %s)", 
+             file_path.c_str(), file_data.size(), content_type.c_str());
+  }
+  
+  static String get_mime_type(const String &path) {
+    if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
+    if (path.endsWith(".png")) return "image/png";
+    if (path.endsWith(".gif")) return "image/gif";
+    if (path.endsWith(".bmp")) return "image/bmp";
+    if (path.endsWith(".webp")) return "image/webp";
+    if (path.endsWith(".svg")) return "image/svg+xml";
+    return "application/octet-stream";
+  }
+};
+
 // Factory pour créer les actions
 class StorageActionFactory {
  public:
@@ -172,6 +308,11 @@ class StorageActionFactory {
   
   static std::unique_ptr<StorageStreamImageAction<>> create_image_action(StorageComponent *parent) {
     return std::make_unique<StorageStreamImageAction<>>(parent);
+  }
+  
+  // NOUVEAU: Setup automatique de l'interception
+  static void setup_http_interception(StorageComponent *parent) {
+    StorageHTTPInterceptor::setup_automatic_interception(parent);
   }
 };
 
