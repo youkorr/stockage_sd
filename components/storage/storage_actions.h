@@ -1,179 +1,37 @@
-// storage_actions.h - Actions pour automatisation avec bypass SD et interception HTTP
-
 #pragma once
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
 #include "esphome/core/application.h"
-#include "esphome/components/web_server_base/web_server_base.h"
-#include "storage.h"
 
+#ifdef USE_WEB_SERVER_BASE
+#include "esphome/components/web_server_base/web_server_base.h"
+#endif
+
+#include "storage.h"
+#include <functional>
 
 namespace esphome {
 namespace storage {
 
-// Action pour streaming direct de fichiers
-template<typename... Ts> 
-class StorageStreamFileAction : public Action<Ts...> {
- public:
-  StorageStreamFileAction(StorageComponent *parent) : parent_(parent) {}
-  
-  TEMPLATABLE_VALUE(std::string, file_path)
-  TEMPLATABLE_VALUE(size_t, chunk_size)
-  
-  void play(Ts... x) override {
-    auto path = this->file_path_.value(x...);
-    auto chunk_size = this->chunk_size_.value(x...);
-    
-    ESP_LOGD("storage_action", "Streaming file %s with chunk size %zu", path.c_str(), chunk_size);
-    
-    // Stream direct depuis SD sans buffer en RAM/Flash 
-    this->parent_->stream_file_direct(path, [this, chunk_size](const uint8_t* data, size_t len) {
-      // Callback de traitement du chunk
-      this->on_chunk_received(data, len);
-    });
-  }
-  
-  // Callback virtuel pour traitement personnalisé des chunks
-  virtual void on_chunk_received(const uint8_t* data, size_t len) {
-    // Par défaut: log du chunk reçu
-    ESP_LOGD("storage_action", "Received chunk: %zu bytes", len);
-  }
-  
-  void set_parent(StorageComponent *parent) { parent_ = parent; }
-
- protected:
-  StorageComponent *parent_;
-};
-
-// Action pour lecture complète de fichier
-template<typename... Ts>
-class StorageReadFileAction : public Action<Ts...> {
- public:
-  StorageReadFileAction(StorageComponent *parent) : parent_(parent) {}
-  
-  TEMPLATABLE_VALUE(std::string, file_path)
-  TEMPLATABLE_VALUE(size_t, max_size)
-  
-  void play(Ts... x) override {
-    auto path = this->file_path_.value(x...);
-    auto max_size = this->max_size_.value(x...);
-    
-    ESP_LOGD("storage_action", "Reading file %s (max size: %zu)", path.c_str(), max_size);
-    
-    // Lecture directe depuis SD
-    auto file_data = this->parent_->read_file_direct(path);
-    
-    // Limiter la taille si spécifiée
-    if (max_size > 0 && file_data.size() > max_size) {
-      file_data.resize(max_size);
-    }
-    
-    if (!file_data.empty()) {
-      this->on_file_read(file_data);
-    } else {
-      ESP_LOGW("storage_action", "Failed to read file %s", path.c_str());
-    }
-  }
-  
-  // Callback virtuel pour traitement du fichier lu
-  virtual void on_file_read(const std::vector<uint8_t>& data) {
-    ESP_LOGD("storage_action", "File read successfully: %zu bytes", data.size());
-  }
-  
-  void set_parent(StorageComponent *parent) { parent_ = parent; }
-
- protected:
-  StorageComponent *parent_;
-};
-
-// Action spécialisée pour streaming audio
-template<typename... Ts>
-class StorageStreamAudioAction : public StorageStreamFileAction<Ts...> {
- public:
-  StorageStreamAudioAction(StorageComponent *parent) : StorageStreamFileAction<Ts...>(parent) {}
-  
-  void on_chunk_received(const uint8_t* data, size_t len) override {
-    // Streaming optimisé pour audio - envoi direct vers I2S
-    if (this->audio_callback_) {
-      this->audio_callback_(data, len);
-    }
-  }
-  
-  void set_audio_callback(std::function<void(const uint8_t*, size_t)> callback) {
-    audio_callback_ = callback;
-  }
-
- private:
-  std::function<void(const uint8_t*, size_t)> audio_callback_;
-};
-
-// Action pour gestion d'images depuis SD
-template<typename... Ts>
-class StorageStreamImageAction : public StorageStreamFileAction<Ts...> {
- public:
-  StorageStreamImageAction(StorageComponent *parent) : StorageStreamFileAction<Ts...>(parent) {}
-  
-  void on_chunk_received(const uint8_t* data, size_t len) override {
-    // Traitement optimisé pour images - decode direct
-    if (this->image_callback_) {
-      this->image_callback_(data, len);
-    }
-  }
-  
-  void set_image_callback(std::function<void(const uint8_t*, size_t)> callback) {
-    image_callback_ = callback;
-  }
-
- private:
-  std::function<void(const uint8_t*, size_t)> image_callback_;
-};
-
-// Action pour vérification d'existence de fichier
-template<typename... Ts>
-class StorageFileExistsAction : public Action<Ts...> {
- public:
-  StorageFileExistsAction(StorageComponent *parent) : parent_(parent) {}
-  
-  TEMPLATABLE_VALUE(std::string, file_path)
-  
-  void play(Ts... x) override {
-    auto path = this->file_path_.value(x...);
-    
-    bool exists = this->parent_->file_exists_direct(path);
-    ESP_LOGD("storage_action", "File %s exists: %s", path.c_str(), exists ? "YES" : "NO");
-    
-    if (this->exists_callback_) {
-      this->exists_callback_(exists);
-    }
-  }
-  
-  void set_exists_callback(std::function<void(bool)> callback) {
-    exists_callback_ = callback;
-  }
-  
-  void set_parent(StorageComponent *parent) { parent_ = parent; }
-
- protected:
-  StorageComponent *parent_;
-  std::function<void(bool)> exists_callback_;
-};
-
-// Custom AsyncWebHandler classes for path handling
+// Classe handler corrigée pour ESP-IDF
 class StoragePathHandler : public AsyncWebHandler {
  public:
-  StoragePathHandler(const String& path, WebRequestMethodComposite method, 
+  StoragePathHandler(const std::string& path, http_method_t method, 
                      std::function<void(AsyncWebServerRequest*)> handler)
     : path_(path), method_(method), handler_(handler) {}
   
   bool canHandle(AsyncWebServerRequest *request) override {
-    if (!(request->method() & method_)) return false;
+    if (request->method() != method_) return false;
     
-    String url = request->url();
-    if (path_.endsWith("*")) {
-      String prefix = path_.substring(0, path_.length() - 1);
-      return url.startsWith(prefix);
+    std::string url = request->url().c_str();
+    
+    // Vérifier si c'est un wildcard
+    if (path_.ends_with("*")) {
+      std::string prefix = path_.substr(0, path_.length() - 1);
+      return url.starts_with(prefix);
     }
-    return url.equals(path_);
+    
+    return url == path_;
   }
   
   void handleRequest(AsyncWebServerRequest *request) override {
@@ -181,21 +39,24 @@ class StoragePathHandler : public AsyncWebHandler {
   }
 
  private:
-  String path_;
-  WebRequestMethodComposite method_;
+  std::string path_;
+  http_method_t method_;
   std::function<void(AsyncWebServerRequest*)> handler_;
 };
 
 class StorageExtensionHandler : public AsyncWebHandler {
  public:
-  StorageExtensionHandler(const String& extension, WebRequestMethodComposite method,
+  StorageExtensionHandler(const std::string& extension, http_method_t method,
                          std::function<void(AsyncWebServerRequest*)> handler)
     : extension_(extension), method_(method), handler_(handler) {}
   
   bool canHandle(AsyncWebServerRequest *request) override {
-    if (!(request->method() & method_)) return false;
-    String url = request->url();
-    return url.endsWith(extension_.substring(1)); // Remove the * from *.jpg
+    if (request->method() != method_) return false;
+    
+    std::string url = request->url().c_str();
+    std::string ext = extension_.substr(1); // Enlever le * de *.jpg
+    
+    return url.ends_with(ext);
   }
   
   void handleRequest(AsyncWebServerRequest *request) override {
@@ -203,186 +64,85 @@ class StorageExtensionHandler : public AsyncWebHandler {
   }
 
  private:
-  String extension_;
-  WebRequestMethodComposite method_;
+  std::string extension_;
+  http_method_t method_;
   std::function<void(AsyncWebServerRequest*)> handler_;
 };
 
-// NOUVEAU: Intercepteur HTTP automatique pour ESPHome
+// Intercepteur HTTP corrigé
 class StorageHTTPInterceptor {
  public:
   static void setup_automatic_interception(StorageComponent *storage) {
-    ESP_LOGI("storage_interceptor", "Setting up automatic HTTP interception for ESPHome images");
+    ESP_LOGI("storage_interceptor", "Setting up HTTP interception for ESP-IDF");
     
-    // Obtenir le serveur web d'ESPHome
-    auto *web_server = App.get_component<web_server::WebServer>();
+#ifdef USE_WEB_SERVER_BASE
+    auto *web_server = App.get_web_server_base();
     if (!web_server) {
       ESP_LOGW("storage_interceptor", "No web server found");
       return;
     }
     
-    install_localhost_handlers(storage, web_server->get_base());
-    install_image_handlers(storage, web_server->get_base());
+    install_handlers(storage, web_server);
+#else
+    ESP_LOGW("storage_interceptor", "Web server not available");
+#endif
   }
   
  private:
-  static void install_localhost_handlers(StorageComponent *storage, web_server_base::WebServerBase *web_server) {
-    // Intercepter toutes les requêtes localhost pour images
-    auto handler1 = new StoragePathHandler("/img/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
-      handle_image_request(storage, request, "/scard/img");
-    });
+  static void install_handlers(StorageComponent *storage, web_server_base::WebServerBase *web_server) {
+    // Handler pour images
+    auto handler1 = new StoragePathHandler("/img/*", HTTP_GET, 
+      [storage](AsyncWebServerRequest *request) {
+        handle_image_request(storage, request, "/scard/img");
+      });
     web_server->add_handler(handler1);
     
-    auto handler2 = new StoragePathHandler("/sd/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
-      handle_image_request(storage, request, "/scard");
-    });
+    // Handler pour extensions
+    auto handler2 = new StorageExtensionHandler("*.jpg", HTTP_GET,
+      [storage](AsyncWebServerRequest *request) {
+        handle_any_image_request(storage, request);
+      });
     web_server->add_handler(handler2);
-    
-    auto handler3 = new StoragePathHandler("/scard/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
-      handle_image_request(storage, request, "");
-    });
-    web_server->add_handler(handler3);
   }
   
-  static void install_image_handlers(StorageComponent *storage, web_server_base::WebServerBase *web_server) {
-    // Handler générique pour tous les fichiers images
-    auto handler1 = new StorageExtensionHandler("*.jpg", HTTP_GET, [storage](AsyncWebServerRequest *request) {
-      handle_any_image_request(storage, request);
-    });
-    web_server->add_handler(handler1);
-    
-    auto handler2 = new StorageExtensionHandler("*.jpeg", HTTP_GET, [storage](AsyncWebServerRequest *request) {
-      handle_any_image_request(storage, request);
-    });
-    web_server->add_handler(handler2);
-    
-    auto handler3 = new StorageExtensionHandler("*.png", HTTP_GET, [storage](AsyncWebServerRequest *request) {
-      handle_any_image_request(storage, request);
-    });
-    web_server->add_handler(handler3);
-    
-    auto handler4 = new StorageExtensionHandler("*.bmp", HTTP_GET, [storage](AsyncWebServerRequest *request) {
-      handle_any_image_request(storage, request);
-    });
-    web_server->add_handler(handler4);
-    
-    auto handler5 = new StorageExtensionHandler("*.gif", HTTP_GET, [storage](AsyncWebServerRequest *request) {
-      handle_any_image_request(storage, request);
-    });
-    web_server->add_handler(handler5);
-  }
-  
-  static void handle_image_request(StorageComponent *storage, AsyncWebServerRequest *request, const String &base_path) {
-    String url_path = request->url();
-    String full_path = base_path + url_path;
-    
-    ESP_LOGD("storage_interceptor", "Image request: %s -> %s", url_path.c_str(), full_path.c_str());
-    
-    serve_file_from_sd(storage, request, full_path);
-  }
-  
-  static void handle_any_image_request(StorageComponent *storage, AsyncWebServerRequest *request) {
-    String url_path = request->url();
-    
-    // Essayer plusieurs emplacements possibles
-    std::vector<String> possible_paths = {
-      "/scard" + url_path,
-      "/scard/img" + url_path,
-      "/scard/images" + url_path
-    };
-    
-    for (const auto &path : possible_paths) {
-      if (storage->file_exists_direct(path.c_str())) {
-        ESP_LOGD("storage_interceptor", "Found image at: %s", path.c_str());
-        serve_file_from_sd(storage, request, path);
-        return;
-      }
-    }
-    
-    ESP_LOGW("storage_interceptor", "Image not found: %s", url_path.c_str());
-    request->send(404, "text/plain", "Image not found on SD card");
-  }
-  
-  static void serve_file_from_sd(StorageComponent *storage, AsyncWebServerRequest *request, const String &file_path) {
+  static void serve_file_from_sd(StorageComponent *storage, AsyncWebServerRequest *request, 
+                                const std::string &file_path) {
     if (!storage->file_exists_direct(file_path.c_str())) {
       request->send(404, "text/plain", "File not found");
       return;
     }
     
-    // Lire le fichier depuis SD
     auto file_data = storage->read_file_direct(file_path.c_str());
     if (file_data.empty()) {
-      request->send(500, "text/plain", "Failed to read file from SD");
+      request->send(500, "text/plain", "Failed to read file");
       return;
     }
     
-    // Déterminer le type MIME
-    String content_type = get_mime_type(file_path);
+    std::string content_type = get_mime_type(file_path);
     
-    // Créer la réponse - Fix: use beginResponse instead of beginResponse_P
-    AsyncWebServerResponse *response = request->beginResponse(
+    // Créer réponse avec les données binaires
+    AsyncWebServerResponse *response = request->beginResponse_P(
       200, 
       content_type.c_str(), 
-      (const uint8_t*)file_data.data(), 
+      file_data.data(), 
       file_data.size()
     );
     
-    // Headers d'optimisation
     response->addHeader("Cache-Control", "public, max-age=3600");
-    response->addHeader("Access-Control-Allow-Origin", "*");
-    // Fix: Cast size_t to String properly
-    response->addHeader("Content-Length", String((unsigned int)file_data.size()));
+    response->addHeader("Content-Length", std::to_string(file_data.size()).c_str());
     
     request->send(response);
-    
-    ESP_LOGD("storage_interceptor", "Served: %s (%zu bytes, %s)", 
-             file_path.c_str(), file_data.size(), content_type.c_str());
   }
   
-  static String get_mime_type(const String &path) {
-    // Utiliser une approche compatible avec std::string
-    std::string path_str = path.c_str();
-    
-    // Fonction helper pour vérifier l'extension
-    auto has_extension = [&path_str](const std::string& ext) {
-      if (path_str.length() < ext.length()) return false;
-      return path_str.compare(path_str.length() - ext.length(), ext.length(), ext) == 0;
-    };
-    
-    if (has_extension(".jpg") || has_extension(".jpeg")) return "image/jpeg";
-    if (has_extension(".png")) return "image/png";
-    if (has_extension(".gif")) return "image/gif";
-    if (has_extension(".bmp")) return "image/bmp";
-    if (has_extension(".webp")) return "image/webp";
-    if (has_extension(".svg")) return "image/svg+xml";
+  static std::string get_mime_type(const std::string &path) {
+    if (path.ends_with(".jpg") || path.ends_with(".jpeg")) return "image/jpeg";
+    if (path.ends_with(".png")) return "image/png";
+    if (path.ends_with(".gif")) return "image/gif";
+    if (path.ends_with(".bmp")) return "image/bmp";
     return "application/octet-stream";
-  }
-};
-
-// Factory pour créer les actions
-class StorageActionFactory {
- public:
-  static std::unique_ptr<StorageStreamFileAction<>> create_stream_action(StorageComponent *parent) {
-    return std::make_unique<StorageStreamFileAction<>>(parent);
-  }
-  
-  static std::unique_ptr<StorageReadFileAction<>> create_read_action(StorageComponent *parent) {
-    return std::make_unique<StorageReadFileAction<>>(parent);
-  }
-  
-  static std::unique_ptr<StorageStreamAudioAction<>> create_audio_action(StorageComponent *parent) {
-    return std::make_unique<StorageStreamAudioAction<>>(parent);
-  }
-  
-  static std::unique_ptr<StorageStreamImageAction<>> create_image_action(StorageComponent *parent) {
-    return std::make_unique<StorageStreamImageAction<>>(parent);
-  }
-  
-  // NOUVEAU: Setup automatique de l'interception
-  static void setup_http_interception(StorageComponent *parent) {
-    StorageHTTPInterceptor::setup_automatic_interception(parent);
   }
 };
 
 }  // namespace storage
 }  // namespace esphome
+
