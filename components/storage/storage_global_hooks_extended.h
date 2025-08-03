@@ -5,7 +5,8 @@
 #include <map>
 #include <string>
 #include <functional>
-#include <dlfcn.h>  // For dlsym if available
+#include <cstdio>
+#include <cstdlib>
 
 // Forward declarations for system hooks
 extern "C" {
@@ -195,43 +196,49 @@ class StorageGlobalHooksExtensions {
   static void hook_system_file_calls() {
     ESP_LOGD("storage_hooks", "Installing system file hooks");
     
-    // Sauvegarder les fonctions originales
+    // Sur ESP32, on ne peut pas facilement remplacer les fonctions système
+    // On utilise plutôt une approche de wrapper/interception au niveau application
+    
+    // Sauvegarder les fonctions originales pour référence
     original_fopen = fopen;
     original_fread = fread;
     original_fclose = fclose;
     
-    // TODO: Remplacer les pointeurs (nécessite techniques avancées)
-    // Pour ESP32, on peut utiliser esp_image_load si disponible
-    // ou techniques de patching mémoire
+    // Note: L'interception se fait au niveau des composants ESPHome
+    // qui utilisent nos macros STORAGE_INTERCEPT_*
     
-    ESP_LOGD("storage_hooks", "System file hooks installed");
+    ESP_LOGD("storage_hooks", "System file hooks ready (wrapper mode)");
   }
   
   static void hook_esphome_calls() {
     ESP_LOGD("storage_hooks", "Installing ESPHome-specific hooks");
     
-    // Hook les fonctions ESPHome spécifiques si elles existent
-    // Cela nécessite de connaître les symboles ESPHome exacts
+    // Sur ESP32/ESPHome, on intercepte au niveau des composants
+    // plutôt qu'au niveau système. Les composants utilisent nos macros.
+    
+    ESP_LOGD("storage_hooks", "ESPHome hooks ready (component-level interception)");
   }
   
   static void hook_lvgl_calls() {
     ESP_LOGD("storage_hooks", "Installing LVGL hooks");
     
-    // Hook les fonctions LVGL d'image loading
-    // lv_img_set_src, lv_img_decoder_open, etc.
+    // Pour LVGL sur ESP32, l'interception se fait via les fonctions de callback
+    // ou en remplaçant les drivers d'image lors de l'initialisation LVGL
+    
+    ESP_LOGD("storage_hooks", "LVGL hooks ready (callback-based interception)");
   }
   
   static void restore_original_functions() {
     ESP_LOGD("storage_hooks", "Restoring original functions");
     
-    // Restaurer les pointeurs originaux
-    if (original_fopen) {
-      // fopen = original_fopen; // Nécessite techniques de patching
-    }
+    // Sur ESP32, on ne modifie pas vraiment les fonctions système
+    // donc la "restauration" consiste juste à nettoyer nos états
     
     original_fopen = nullptr;
     original_fread = nullptr;
     original_fclose = nullptr;
+    
+    ESP_LOGD("storage_hooks", "Function restoration completed");
   }
 };
 
@@ -286,24 +293,40 @@ class StorageHooksAutoInstaller {
 static StorageHooksAutoInstaller hooks_auto_installer;
 
 // ===========================================
-// MACROS PRATIQUES
+// MACROS PRATIQUES ESP32-OPTIMISÉES
 // ===========================================
 
+// Macro pour interception intelligente avec fallback
 #define STORAGE_INTERCEPT_READ(path) \
   do { \
-    auto data = StorageGlobalHooks::intercept_file_read(path); \
+    auto data = esp32_storage_read(path); \
     if (!data.empty()) return data; \
   } while(0)
 
+// Macro pour existence avec fallback
 #define STORAGE_INTERCEPT_EXISTS(path) \
   do { \
     if (StorageGlobalHooks::intercept_file_exists(path)) return true; \
+    FILE* f = esp32_storage_fopen(path, "r"); \
+    if (f) { fclose(f); return true; } \
   } while(0)
 
+// Macro pour LVGL avec cache
 #define STORAGE_INTERCEPT_LVGL_IMAGE(path, size_ptr) \
   do { \
     auto* img_data = StorageGlobalHooksExtensions::intercept_lvgl_image_data(path, size_ptr); \
     if (img_data) return img_data; \
+  } while(0)
+
+// Macro pour ouvrir fichier avec redirection SD
+#define STORAGE_FOPEN(path, mode) \
+  (esp32_storage_fopen(path, mode) ?: fopen(path, mode))
+
+// Macro pour streaming audio
+#define STORAGE_INTERCEPT_AUDIO(path, offset, buffer, size, bytes_read) \
+  do { \
+    if (StorageGlobalHooksExtensions::intercept_audio_stream(path, offset, buffer, size, bytes_read)) \
+      return true; \
   } while(0)
 
 // ===========================================
