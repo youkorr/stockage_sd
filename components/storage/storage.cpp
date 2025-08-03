@@ -1,334 +1,232 @@
 #include "storage.h"
-#include "storage_actions.h"
 #include "esphome/core/log.h"
-#include "esphome/core/helpers.h"
-#include "esphome/core/application.h"
-
-#include <esp_vfs_fat.h>
-#include <sys/stat.h>
-#include <dirent.h>
 
 namespace esphome {
 namespace storage {
 
-// Note: TAG is already defined in the header, don't redefine it here
+static const char *const TAG = "storage";
+
+// Instance globale pour hooks
+StorageComponent* StorageComponent::global_instance_ = nullptr;
+
+// ===========================================
+// Implémentation StorageFile avec votre SdMmc existant
+// ===========================================
+
+void StorageFile::stream_direct(std::function<void(const uint8_t*, size_t)> callback) {
+  if (!is_sd_direct() || !sd_component_) {
+    ESP_LOGE(TAG, "SD direct not available for file %s", path_.c_str());
+    return;
+  }
+  
+  ESP_LOGD(TAG, "Streaming file %s directly from SD", path_.c_str());
+  
+  // Utilise votre méthode read_file_stream existante
+  sd_component_->read_file_stream(path_.c_str(), 0, chunk_size_, callback);
+}
+
+void StorageFile::stream_chunked_direct(std::function<void(const uint8_t*, size_t)> callback) {
+  if (!is_sd_direct() || !sd_component_) {
+    ESP_LOGE(TAG, "SD direct not available for file %s", path_.c_str());
+    return;
+  }
+  
+  // Stream par chunks en utilisant votre méthode read_file_chunked existante
+  size_t offset = 0;
+  size_t file_size = get_file_size_direct();
+  
+  ESP_LOGD(TAG, "Streaming file %s in chunks of %u bytes", path_.c_str(), chunk_size_);
+  
+  while (offset < file_size) {
+    size_t current_chunk = std::min((size_t)chunk_size_, file_size - offset);
+    auto chunk_data = sd_component_->read_file_chunked(path_, offset, current_chunk);
+    
+    if (chunk_data.empty()) {
+      ESP_LOGE(TAG, "Failed to read chunk at offset %zu", offset);
+      break;
+    }
+    
+    // Callback direct - pas de stockage en RAM
+    callback(chunk_data.data(), chunk_data.size());
+    offset += current_chunk;
+  }
+}
+
+std::vector<uint8_t> StorageFile::read_direct() {
+  if (!is_sd_direct() || !sd_component_) {
+    return {};
+  }
+  
+  ESP_LOGD(TAG, "Reading file %s directly from SD", path_.c_str());
+  return sd_component_->read_file(path_);
+}
+
+bool StorageFile::read_audio_chunk(size_t offset, uint8_t* buffer, size_t buffer_size, size_t& bytes_read) {
+  if (!is_sd_direct() || !sd_component_) {
+    return false;
+  }
+  
+  // Lecture directe chunk par chunk pour audio en utilisant votre méthode existante
+  auto chunk_data = sd_component_->read_file_chunked(path_, offset, buffer_size);
+  bytes_read = chunk_data.size();
+  
+  if (bytes_read > 0) {
+    memcpy(buffer, chunk_data.data(), bytes_read);
+    current_position_ = offset + bytes_read;
+    return true;
+  }
+  
+  return false;
+}
+
+size_t StorageFile::get_file_size_direct() const {
+  if (!file_size_cached_) {
+    if (is_sd_direct() && sd_component_) {
+      cached_file_size_ = sd_component_->file_size(path_);
+    } else {
+      cached_file_size_ = 0;
+    }
+    file_size_cached_ = true;
+  }
+  return cached_file_size_;
+}
+
+bool StorageFile::file_exists_direct() const {
+  if (!is_sd_direct() || !sd_component_) {
+    return false;
+  }
+  
+  return sd_component_->file_size(path_) > 0;
+}
+
+// ===========================================
+// Implémentation StorageComponent
+// ===========================================
 
 void StorageComponent::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Storage Component...");
   
-  // Vérifier la configuration de base
-  if (!this->sd_card_) {
-    ESP_LOGE(TAG, "No SD card component configured!");
-    this->mark_failed();
+  // Configurer l'instance globale pour hooks
+  StorageComponent::set_global_instance(this);
+  
+  if (platform_ == "sd_card" || platform_ == "sd_direct") {
+    setup_sd_direct();
+  } else if (platform_ == "flash") {
+    setup_flash();
+  } else if (platform_ == "inline") {
+    setup_inline();
+  }
+  
+  ESP_LOGCONFIG(TAG, "Storage Component setup complete. Platform: %s, Files: %zu", 
+                platform_.c_str(), files_.size());
+}
+
+void StorageComponent::setup_sd_direct() {
+  ESP_LOGCONFIG(TAG, "Configuring SD direct access...");
+  
+  if (!sd_component_) {
+    ESP_LOGE(TAG, "SD component not set for SD direct platform!");
     return;
   }
   
-  // Attendre que la SD soit prête
-  if (!this->sd_card_->is_mounted()) {
-    ESP_LOGW(TAG, "SD card not mounted yet, retrying...");
-    this->set_timeout(1000, [this]() { this->setup(); });
-    return;
+  // Configurer tous les fichiers pour SD direct
+  for (auto *file : files_) {
+    file->set_sd_component(sd_component_);
+    file->set_platform("sd_direct");
+    ESP_LOGD(TAG, "Configured file %s for SD direct access", file->get_path().c_str());
   }
   
-  // Setup des différents systèmes
-  this->setup_sd_access_();
-  this->setup_cache_system_();
-  
-  // Setup de l'interception HTTP si demandée
-  if (this->auto_http_intercept_) {
-    ESP_LOGI(TAG, "HTTP interception enabled - setting up web server handlers...");
-    this->set_timeout(2000, [this]() {
-      this->setup_http_interception_();
-    });
+  platform_ = "sd_direct";
+  ESP_LOGI(TAG, "SD direct access enabled - files read directly from SD without flash usage");
+}
+
+void StorageComponent::setup_sd_card() {
+  // Ancienne méthode - on redirige vers sd_direct
+  ESP_LOGW(TAG, "sd_card platform deprecated, using sd_direct instead");
+  setup_sd_direct();
+}
+
+void StorageComponent::setup_flash() {
+  ESP_LOGCONFIG(TAG, "Using flash storage (embedded files)");
+  // Implementation existante pour flash
+}
+
+void StorageComponent::setup_inline() {
+  ESP_LOGCONFIG(TAG, "Using inline storage");
+  // Implementation existante pour inline
+}
+
+std::string StorageComponent::get_file_path(const std::string &file_id) const {
+  for (const auto *file : files_) {
+    if (file->get_id() == file_id) {
+      return file->get_path();
+    }
   }
-  
-  ESP_LOGCONFIG(TAG, "Storage Component setup complete. Platform: %s, Files: %d, HTTP Intercept: %s", 
-                this->platform_name_.c_str(), 
-                this->configured_files_.size(),
-                this->auto_http_intercept_ ? "ENABLED" : "DISABLED");
+  return "";
 }
 
-void StorageComponent::loop() {
-  // Nettoyage périodique du cache
-  static uint32_t last_cleanup = 0;
-  if (millis() - last_cleanup > 60000) { // Toutes les minutes
-    this->cleanup_cache_();
-    last_cleanup = millis();
+StorageFile* StorageComponent::get_file_by_path(const std::string &path) {
+  for (auto *file : files_) {
+    if (file->get_path() == path) {
+      return file;
+    }
   }
-}
-
-void StorageComponent::dump_config() {
-  ESP_LOGCONFIG(TAG, "Storage Component:");
-  ESP_LOGCONFIG(TAG, "  Platform: %s", this->platform_name_.c_str());
-  ESP_LOGCONFIG(TAG, "  Global Bypass: %s", YESNO(this->enable_global_bypass_));
-  ESP_LOGCONFIG(TAG, "  Cache Size: %zu bytes", this->cache_size_);
-  ESP_LOGCONFIG(TAG, "  HTTP Interception: %s", YESNO(this->auto_http_intercept_));
-  ESP_LOGCONFIG(TAG, "  Configured Files: %d", this->configured_files_.size());
-  
-  for (const auto& file : this->configured_files_) {
-    ESP_LOGCONFIG(TAG, "    - ID: %s, Path: %s, Chunk: %zu", 
-                  file.id.c_str(), file.path.c_str(), file.chunk_size);
-  }
-  
-  ESP_LOGCONFIG(TAG, "  Statistics:");
-  ESP_LOGCONFIG(TAG, "    Cache Hits: %u", this->cache_hits_);
-  ESP_LOGCONFIG(TAG, "    Cache Misses: %u", this->cache_misses_);
-  ESP_LOGCONFIG(TAG, "    Direct Reads: %u", this->direct_reads_);
-  ESP_LOGCONFIG(TAG, "    Cache Usage: %zu/%zu bytes", this->current_cache_size_, this->cache_size_);
-}
-
-void StorageComponent::add_file(const std::string &path, size_t chunk_size) {
-  std::string id = "file_" + std::to_string(this->configured_files_.size());
-  this->add_file_with_id(id, path, chunk_size);
-}
-
-void StorageComponent::add_file_with_id(const std::string &id, const std::string &path, size_t chunk_size) {
-  FileConfig config(id, this->normalize_path_(path), chunk_size);
-  this->configured_files_.push_back(config);
-  ESP_LOGD(TAG, "Added file config: ID=%s, Path=%s, Chunk=%zu", id.c_str(), path.c_str(), chunk_size);
+  return nullptr;
 }
 
 std::vector<uint8_t> StorageComponent::read_file_direct(const std::string &path) {
-  std::string normalized_path = this->normalize_path_(path);
-  
-  // Vérifier le cache d'abord
-  if (!this->enable_global_bypass_ && this->is_cached(normalized_path)) {
-    this->cache_hits_++;
-    ESP_LOGD(TAG, "Cache hit for: %s", normalized_path.c_str());
-    return this->get_from_cache(normalized_path);
+  if (!sd_component_) {
+    return {};
   }
   
-  // Lecture directe depuis SD
-  this->cache_misses_++;
-  this->direct_reads_++;
-  auto data = this->read_file_from_sd_(normalized_path);
-  
-  // Ajouter au cache si pas en mode bypass
-  if (!this->enable_global_bypass_ && !data.empty()) {
-    this->add_to_cache(normalized_path, data);
-  }
-  
-  ESP_LOGD(TAG, "Read file direct: %s (%zu bytes)", normalized_path.c_str(), data.size());
-  return data;
+  ESP_LOGD(TAG, "Reading file %s directly from SD", path.c_str());
+  return sd_component_->read_file(path);
 }
 
 bool StorageComponent::file_exists_direct(const std::string &path) {
-  std::string normalized_path = this->normalize_path_(path);
-  return this->check_file_exists_sd_(normalized_path);
-}
-
-size_t StorageComponent::get_file_size_direct(const std::string &path) {
-  std::string normalized_path = this->normalize_path_(path);
-  return this->get_file_size_sd_(normalized_path);
+  if (!sd_component_) {
+    return false;
+  }
+  
+  return sd_component_->file_size(path) > 0;
 }
 
 void StorageComponent::stream_file_direct(const std::string &path, std::function<void(const uint8_t*, size_t)> callback) {
-  this->stream_file_chunked(path, 1024, callback);
-}
-
-void StorageComponent::stream_file_chunked(const std::string &path, size_t chunk_size, std::function<void(const uint8_t*, size_t)> callback) {
-  std::string normalized_path = this->normalize_path_(path);
-  
-  ESP_LOGD(TAG, "Streaming file: %s (chunk size: %zu)", normalized_path.c_str(), chunk_size);
-  
-  FILE* file = fopen(normalized_path.c_str(), "rb");
-  if (!file) {
-    ESP_LOGW(TAG, "Failed to open file for streaming: %s", normalized_path.c_str());
+  if (!sd_component_) {
+    ESP_LOGE(TAG, "SD component not available for streaming");
     return;
   }
   
-  std::vector<uint8_t> buffer(chunk_size);
-  size_t total_read = 0;
+  ESP_LOGD(TAG, "Streaming file %s directly from SD", path.c_str());
   
-  while (true) {
-    size_t bytes_read = fread(buffer.data(), 1, chunk_size, file);
-    if (bytes_read == 0) break;
-    
-    callback(buffer.data(), bytes_read);
-    total_read += bytes_read;
-    
-    if (bytes_read < chunk_size) break; // EOF
-  }
-  
-  fclose(file);
-  ESP_LOGD(TAG, "Streaming complete: %s (%zu bytes total)", normalized_path.c_str(), total_read);
+  // Utilise votre méthode read_file_stream existante
+  sd_component_->read_file_stream(path.c_str(), 0, 1024, callback);
 }
 
-void StorageComponent::clear_cache() {
-  this->file_cache_.clear();
-  this->current_cache_size_ = 0;
-  ESP_LOGI(TAG, "Cache cleared");
+// ===========================================
+// Hooks globaux pour bypass ESPHome
+// ===========================================
+
+std::vector<uint8_t> StorageGlobalHooks::intercept_file_read(const std::string &path) {
+  auto *storage = StorageComponent::get_global_instance();
+  if (!storage) return {};
+  
+  ESP_LOGD(TAG, "Intercepting file read: %s", path.c_str());
+  return storage->read_file_direct(path);
 }
 
-void StorageComponent::remove_from_cache(const std::string &path) {
-  std::string normalized_path = this->normalize_path_(path);
-  auto it = this->file_cache_.find(normalized_path);
-  if (it != this->file_cache_.end()) {
-    this->current_cache_size_ -= it->second.size;
-    this->file_cache_.erase(it);
-    ESP_LOGD(TAG, "Removed from cache: %s", normalized_path.c_str());
-  }
+bool StorageGlobalHooks::intercept_file_exists(const std::string &path) {
+  auto *storage = StorageComponent::get_global_instance();
+  if (!storage) return false;
+  
+  return storage->file_exists_direct(path);
 }
 
-size_t StorageComponent::get_cache_usage() const {
-  return this->current_cache_size_;
-}
-
-// Méthodes protégées
-
-void StorageComponent::setup_sd_access_() {
-  ESP_LOGCONFIG(TAG, "Configuring SD direct access...");
+void StorageGlobalHooks::intercept_file_stream(const std::string &path, std::function<void(const uint8_t*, size_t)> callback) {
+  auto *storage = StorageComponent::get_global_instance();
+  if (!storage) return;
   
-  for (const auto& file_config : this->configured_files_) {
-    if (!this->file_exists_direct(file_config.path)) {
-      ESP_LOGW(TAG, "Configured file not found: %s", file_config.path.c_str());
-    } else {
-      ESP_LOGD(TAG, "Configured file %s for SD direct access", file_config.path.c_str());
-    }
-  }
-  
-  if (this->enable_global_bypass_) {
-    ESP_LOGI(TAG, "SD direct access enabled - files read directly from SD without flash usage");
-  }
-}
-
-void StorageComponent::setup_cache_system_() {
-  ESP_LOGD(TAG, "Setting up cache system (size: %zu bytes)", this->cache_size_);
-  this->file_cache_.clear();
-  this->current_cache_size_ = 0;
-}
-
-void StorageComponent::setup_http_interception_() {
-  ESP_LOGI(TAG, "Initializing HTTP interception for SD files...");
-  
-#ifdef USE_EXCEPTIONS
-  try {
-    // Utiliser la factory pour setup l'interception
-    // Note: You'll need to implement StorageActionFactory::setup_http_interception
-    // StorageActionFactory::setup_http_interception(this);
-    ESP_LOGI(TAG, "HTTP interception setup successful!");
-  } catch (const std::exception& e) {
-    ESP_LOGW(TAG, "Failed to setup HTTP interception: %s", e.what());
-  } catch (...) {
-    ESP_LOGW(TAG, "Failed to setup HTTP interception: unknown error");
-  }
-#else
-  // Simple version without exception handling
-  // StorageActionFactory::setup_http_interception(this);
-  ESP_LOGI(TAG, "HTTP interception setup successful!");
-#endif
-}
-
-bool StorageComponent::is_cached(const std::string &path) const {
-  return this->file_cache_.find(path) != this->file_cache_.end();
-}
-
-void StorageComponent::add_to_cache(const std::string &path, const std::vector<uint8_t> &data) {
-  if (data.size() > this->cache_size_) {
-    ESP_LOGD(TAG, "File too large for cache: %s (%zu bytes)", path.c_str(), data.size());
-    return;
-  }
-  
-  // Nettoyer le cache si nécessaire
-  while (this->current_cache_size_ + data.size() > this->cache_size_ && !this->file_cache_.empty()) {
-    this->cleanup_cache_();
-  }
-  
-  this->file_cache_[path] = CacheEntry(data);
-  this->current_cache_size_ += data.size();
-  ESP_LOGD(TAG, "Added to cache: %s (%zu bytes)", path.c_str(), data.size());
-}
-
-std::vector<uint8_t> StorageComponent::get_from_cache(const std::string &path) {
-  auto it = this->file_cache_.find(path);
-  if (it != this->file_cache_.end()) {
-    it->second.last_access = millis();
-    return it->second.data;
-  }
-  return {};
-}
-
-void StorageComponent::cleanup_cache_() {
-  if (this->file_cache_.empty()) return;
-  
-  // Trouver l'entrée la plus ancienne
-  auto oldest = this->file_cache_.begin();
-  for (auto it = this->file_cache_.begin(); it != this->file_cache_.end(); ++it) {
-    if (it->second.last_access < oldest->second.last_access) {
-      oldest = it;
-    }
-  }
-  
-  ESP_LOGD(TAG, "Removing oldest cache entry: %s", oldest->first.c_str());
-  this->current_cache_size_ -= oldest->second.size;
-  this->file_cache_.erase(oldest);
-}
-
-std::vector<uint8_t> StorageComponent::read_file_from_sd_(const std::string &path) {
-  FILE* file = fopen(path.c_str(), "rb");
-  if (!file) {
-    ESP_LOGW(TAG, "Failed to open file: %s", path.c_str());
-    return {};
-  }
-  
-  // Obtenir la taille du fichier
-  fseek(file, 0, SEEK_END);
-  size_t file_size = ftell(file);
-  fseek(file, 0, SEEK_SET);
-  
-  if (file_size == 0) {
-    fclose(file);
-    ESP_LOGW(TAG, "Empty file: %s", path.c_str());
-    return {};
-  }
-  
-  // Lire le fichier
-  std::vector<uint8_t> data(file_size);
-  size_t bytes_read = fread(data.data(), 1, file_size, file);
-  fclose(file);
-  
-  if (bytes_read != file_size) {
-    ESP_LOGW(TAG, "Failed to read complete file: %s (%zu/%zu bytes)", path.c_str(), bytes_read, file_size);
-    return {};
-  }
-  
-  return data;
-}
-
-bool StorageComponent::check_file_exists_sd_(const std::string &path) {
-  struct stat st;
-  return (stat(path.c_str(), &st) == 0);
-}
-
-size_t StorageComponent::get_file_size_sd_(const std::string &path) {
-  struct stat st;
-  if (stat(path.c_str(), &st) == 0) {
-    return st.st_size;
-  }
-  return 0;
-}
-
-std::string StorageComponent::normalize_path_(const std::string &path) {
-  std::string normalized = path;
-  
-  // S'assurer que le chemin commence par /
-  if (!normalized.empty() && normalized[0] != '/') {
-    normalized = "/" + normalized;
-  }
-  
-  // Remplacer les doubles slashes
-  size_t pos = 0;
-  while ((pos = normalized.find("//", pos)) != std::string::npos) {
-    normalized.replace(pos, 2, "/");
-  }
-  
-  return normalized;
-}
-
-bool StorageComponent::is_valid_path_(const std::string &path) {
-  if (path.empty()) return false;
-  if (path.find("..") != std::string::npos) return false; // Sécurité
-  return true;
+  storage->stream_file_direct(path, callback);
 }
 
 }  // namespace storage
