@@ -5,6 +5,7 @@
 #include "esphome/core/component.h"
 #include "esphome/core/application.h"
 #include "esphome/components/web_server_base/web_server_base.h"
+#include "esphome/components/web_server/web_server.h"
 #include "storage.h"
 
 namespace esphome {
@@ -157,6 +158,56 @@ class StorageFileExistsAction : public Action<Ts...> {
   std::function<void(bool)> exists_callback_;
 };
 
+// Custom AsyncWebHandler classes for path handling
+class StoragePathHandler : public AsyncWebHandler {
+ public:
+  StoragePathHandler(const String& path, WebRequestMethodComposite method, 
+                     std::function<void(AsyncWebServerRequest*)> handler)
+    : path_(path), method_(method), handler_(handler) {}
+  
+  bool canHandle(AsyncWebServerRequest *request) override {
+    if (!(request->method() & method_)) return false;
+    
+    String url = request->url();
+    if (path_.endsWith("*")) {
+      String prefix = path_.substring(0, path_.length() - 1);
+      return url.startsWith(prefix);
+    }
+    return url.equals(path_);
+  }
+  
+  void handleRequest(AsyncWebServerRequest *request) override {
+    handler_(request);
+  }
+
+ private:
+  String path_;
+  WebRequestMethodComposite method_;
+  std::function<void(AsyncWebServerRequest*)> handler_;
+};
+
+class StorageExtensionHandler : public AsyncWebHandler {
+ public:
+  StorageExtensionHandler(const String& extension, WebRequestMethodComposite method,
+                         std::function<void(AsyncWebServerRequest*)> handler)
+    : extension_(extension), method_(method), handler_(handler) {}
+  
+  bool canHandle(AsyncWebServerRequest *request) override {
+    if (!(request->method() & method_)) return false;
+    String url = request->url();
+    return url.endsWith(extension_.substring(1)); // Remove the * from *.jpg
+  }
+  
+  void handleRequest(AsyncWebServerRequest *request) override {
+    handler_(request);
+  }
+
+ private:
+  String extension_;
+  WebRequestMethodComposite method_;
+  std::function<void(AsyncWebServerRequest*)> handler_;
+};
+
 // NOUVEAU: Intercepteur HTTP automatique pour ESPHome
 class StorageHTTPInterceptor {
  public:
@@ -164,54 +215,61 @@ class StorageHTTPInterceptor {
     ESP_LOGI("storage_interceptor", "Setting up automatic HTTP interception for ESPHome images");
     
     // Obtenir le serveur web d'ESPHome
-    auto *web_server = App.get_web_server();
+    auto *web_server = App.get_component<web_server::WebServer>();
     if (!web_server) {
-      ESP_LOGW("storage_interceptor", "No web server found, creating one");
-      // ESPHome créera automatiquement un serveur web si nécessaire
+      ESP_LOGW("storage_interceptor", "No web server found");
       return;
     }
     
-    install_localhost_handlers(storage, web_server);
-    install_image_handlers(storage, web_server);
+    install_localhost_handlers(storage, web_server->get_base());
+    install_image_handlers(storage, web_server->get_base());
   }
   
  private:
   static void install_localhost_handlers(StorageComponent *storage, web_server_base::WebServerBase *web_server) {
     // Intercepter toutes les requêtes localhost pour images
-    web_server->add_handler("/img/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+    auto handler1 = new StoragePathHandler("/img/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
       handle_image_request(storage, request, "/scard/img");
     });
+    web_server->add_handler(handler1);
     
-    web_server->add_handler("/sd/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+    auto handler2 = new StoragePathHandler("/sd/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
       handle_image_request(storage, request, "/scard");
     });
+    web_server->add_handler(handler2);
     
-    web_server->add_handler("/scard/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+    auto handler3 = new StoragePathHandler("/scard/*", HTTP_GET, [storage](AsyncWebServerRequest *request) {
       handle_image_request(storage, request, "");
     });
+    web_server->add_handler(handler3);
   }
   
   static void install_image_handlers(StorageComponent *storage, web_server_base::WebServerBase *web_server) {
     // Handler générique pour tous les fichiers images
-    web_server->add_handler("*.jpg", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+    auto handler1 = new StorageExtensionHandler("*.jpg", HTTP_GET, [storage](AsyncWebServerRequest *request) {
       handle_any_image_request(storage, request);
     });
+    web_server->add_handler(handler1);
     
-    web_server->add_handler("*.jpeg", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+    auto handler2 = new StorageExtensionHandler("*.jpeg", HTTP_GET, [storage](AsyncWebServerRequest *request) {
       handle_any_image_request(storage, request);
     });
+    web_server->add_handler(handler2);
     
-    web_server->add_handler("*.png", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+    auto handler3 = new StorageExtensionHandler("*.png", HTTP_GET, [storage](AsyncWebServerRequest *request) {
       handle_any_image_request(storage, request);
     });
+    web_server->add_handler(handler3);
     
-    web_server->add_handler("*.bmp", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+    auto handler4 = new StorageExtensionHandler("*.bmp", HTTP_GET, [storage](AsyncWebServerRequest *request) {
       handle_any_image_request(storage, request);
     });
+    web_server->add_handler(handler4);
     
-    web_server->add_handler("*.gif", HTTP_GET, [storage](AsyncWebServerRequest *request) {
+    auto handler5 = new StorageExtensionHandler("*.gif", HTTP_GET, [storage](AsyncWebServerRequest *request) {
       handle_any_image_request(storage, request);
     });
+    web_server->add_handler(handler5);
   }
   
   static void handle_image_request(StorageComponent *storage, AsyncWebServerRequest *request, const String &base_path) {
@@ -261,8 +319,8 @@ class StorageHTTPInterceptor {
     // Déterminer le type MIME
     String content_type = get_mime_type(file_path);
     
-    // Créer la réponse
-    AsyncWebServerResponse *response = request->beginResponse_P(
+    // Créer la réponse - Fix: use beginResponse instead of beginResponse_P
+    AsyncWebServerResponse *response = request->beginResponse(
       200, 
       content_type.c_str(), 
       (const uint8_t*)file_data.data(), 
@@ -272,7 +330,8 @@ class StorageHTTPInterceptor {
     // Headers d'optimisation
     response->addHeader("Cache-Control", "public, max-age=3600");
     response->addHeader("Access-Control-Allow-Origin", "*");
-    response->addHeader("Content-Length", String(file_data.size()));
+    // Fix: Cast size_t to String properly
+    response->addHeader("Content-Length", String((unsigned int)file_data.size()));
     
     request->send(response);
     
