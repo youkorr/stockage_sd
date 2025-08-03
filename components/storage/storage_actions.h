@@ -5,8 +5,8 @@
 #include "esphome/core/component.h"
 #include "esphome/core/application.h"
 #include "esphome/components/web_server_base/web_server_base.h"
-#include "esphome/components/web_server/web_server.h"
 #include "storage.h"
+#include "esp_netif.h"
 
 namespace esphome {
 namespace storage {
