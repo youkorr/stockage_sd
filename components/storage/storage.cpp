@@ -1,232 +1,228 @@
 #include "storage.h"
+
+#include "esphome/core/hal.h"
+#include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
+#include "esphome/core/component.h"
 
 namespace esphome {
 namespace storage {
 
 static const char *const TAG = "storage";
+FileInfo::FileInfo(std::string const &path, size_t size, bool is_directory)
+    : path(path), size(size), is_directory(is_directory) {
+  this->read_offset = 0;
+}
 
-// Instance globale pour hooks
-StorageComponent* StorageComponent::global_instance_ = nullptr;
+FileInfo::FileInfo() : path(), size(), is_directory() { this->read_offset = 0; }
 
-// ===========================================
-// Implémentation StorageFile avec votre SdMmc existant
-// ===========================================
+std::vector<FileInfo> Storage::list_directory(const std::string &path) { return this->direct_list_directory(path); }
 
-void StorageFile::stream_direct(std::function<void(const uint8_t*, size_t)> callback) {
-  if (!is_sd_direct() || !sd_component_) {
-    ESP_LOGE(TAG, "SD direct not available for file %s", path_.c_str());
+FileInfo Storage::get_file_info(const std::string &path) { return this->direct_get_file_info(path); }
+
+void Storage::set_file(FileInfo *file) {
+  if (this->current_file_ != file) {
+    this->current_file_ = file;
+    this->direct_set_file(this->current_file_->path);
+  }
+}
+
+uint8_t Storage::read() {
+  uint8_t data;
+  data = this->direct_read_byte(this->current_file_->read_offset);
+  this->update_offset(1);
+  return data;
+}
+
+bool Storage::write(uint8_t data) {
+  //    if(this->buffer_ != nullptr) {
+  //       this->buffer_[this->current_offset_] = data;
+  //    } else {
+  ESP_LOGW(TAG, "Buffer not available using direct access instead");
+  return this->direct_write_byte(data);
+  //    }
+}
+
+bool Storage::append(uint8_t data) { return this->direct_append_byte(data); }
+
+size_t Storage::read_array(uint8_t *data, size_t data_length) {
+  size_t num_bytes_read = this->direct_read_byte_array(this->current_file_->read_offset, data, data_length);
+  this->update_offset(num_bytes_read);
+  return num_bytes_read;
+}
+
+bool Storage::write_array(uint8_t *data, size_t data_length) {
+  return this->direct_write_byte_array(data, data_length);
+}
+
+bool Storage::append_array(uint8_t *data, size_t data_length) {
+  return this->direct_write_byte_array(data, data_length);
+}
+// void Storage::allocate_buffer(uint32_t buffer_size) {
+//    if(buffer_size) {
+//       if(this->buffer_ == nullptr) {
+//          RAMAllocator<uint8_t> allocator(RAMAllocator<uint8_t>::NONE);
+//          this->buffer_ = allocator.allocate(buffer_size);
+//       }
+//       if(this->buffer_ == nullptr) {
+//          ESP_LOGE(TAG, "Unable to Allocate memory for storage buffer");
+//       }
+//    }
+// }
+
+void Storage::update_offset(size_t value) {
+  this->current_file_->read_offset += value;
+  //    if (this->current_offset_ > this->buffer_size_){
+  //       if(this->max_offset_ && (this->base_offset_ + this->current_offset_ > this->max_offset_)) {
+  //          if(this->buffer_offset_ != this->base_offset_){
+  //             this->load_buffer(base_offset_,0,this->buffer_size_);
+  //          }
+  //       } else {
+  //          uint32_t new_buffer_offset = this->buffer_offset_+this->current_offset_;
+  //          if(this->max_offset_ && (new_buffer_offset+this->buffer_size_-1 > this->max_offset_)) {
+  //             this->load_buffer(this->buffer_offset_+this->current_offset_,0,this->max_offset_-new_buffer_offset+1);
+  //          } else {
+  //             this->load_buffer(this->buffer_offset_+this->current_offset_,0,this->buffer_size_);
+  //          }
+  //       }
+  //       this->current_offset_ = 0;
+  //    }
+}
+
+std::vector<FileInfo> StorageClient::list_directory(const std::string &path) {
+  int prefix_end = path.find("://");
+  if (prefix_end < 0) {
+    ESP_LOGE(TAG, "Invalid path. Must start with a valid prefix");
+    return std::vector<FileInfo>();
+  }
+  std::string prefix = path.substr(0, prefix_end);
+  auto nstorage = storages.find(prefix);
+  if (nstorage == storages.end()) {
+    ESP_LOGE(TAG, "storage %s prefix does not exist", prefix);
+    return std::vector<FileInfo>();
+  }
+  std::vector<FileInfo> result = nstorage->second->list_directory(path.substr(prefix_end + 3));
+  for (auto i = result.begin(); i != result.end(); i++) {
+    i->path = prefix + "://" + i->path;
+  }
+  return result;
+}
+
+FileInfo StorageClient::get_file_info(const std::string &path) {
+  int prefix_end = path.find("://");
+  if (prefix_end < 0) {
+    ESP_LOGE(TAG, "Invalid path. Must start with a valid prefix");
+    return FileInfo();
+  }
+  std::string prefix = path.substr(0, prefix_end);
+  auto nstorage = storages.find(prefix);
+  if (nstorage == storages.end()) {
+    ESP_LOGE(TAG, "storage %s prefix does not exist", prefix);
+    return FileInfo();
+  }
+  FileInfo result = nstorage->second->get_file_info(path.substr(prefix_end + 3));
+  result.path = prefix + "://" + result.path;
+  return result;
+}
+
+void StorageClient::set_file(const std::string &path) {
+  int prefix_end = path.find("://");
+  if (prefix_end < 0) {
+    ESP_LOGE(TAG, "Invalid path. Must start with a valid prefix");
     return;
   }
-  
-  ESP_LOGD(TAG, "Streaming file %s directly from SD", path_.c_str());
-  
-  // Utilise votre méthode read_file_stream existante
-  sd_component_->read_file_stream(path_.c_str(), 0, chunk_size_, callback);
-}
-
-void StorageFile::stream_chunked_direct(std::function<void(const uint8_t*, size_t)> callback) {
-  if (!is_sd_direct() || !sd_component_) {
-    ESP_LOGE(TAG, "SD direct not available for file %s", path_.c_str());
+  std::string prefix = path.substr(0, prefix_end);
+  auto nstorage = storages.find(prefix);
+  if (nstorage == storages.end()) {
+    ESP_LOGE(TAG, "storage %s prefix does not exist", prefix);
     return;
   }
-  
-  // Stream par chunks en utilisant votre méthode read_file_chunked existante
-  size_t offset = 0;
-  size_t file_size = get_file_size_direct();
-  
-  ESP_LOGD(TAG, "Streaming file %s in chunks of %u bytes", path_.c_str(), chunk_size_);
-  
-  while (offset < file_size) {
-    size_t current_chunk = std::min((size_t)chunk_size_, file_size - offset);
-    auto chunk_data = sd_component_->read_file_chunked(path_, offset, current_chunk);
-    
-    if (chunk_data.empty()) {
-      ESP_LOGE(TAG, "Failed to read chunk at offset %zu", offset);
-      break;
-    }
-    
-    // Callback direct - pas de stockage en RAM
-    callback(chunk_data.data(), chunk_data.size());
-    offset += current_chunk;
+  this->current_storage_ = nstorage->second;
+  this->current_file_ = this->current_storage_->get_file_info(path.substr(prefix_end + 3));
+  this->current_storage_->set_file(&(this->current_file_));
+  ESP_LOGVV(TAG, "Current File Set to %s", this->current_file_.path.c_str());
+}
+
+void StorageClient::set_file(FileInfo file) {
+  this->current_file_ = file;
+  this->current_storage_->set_file(&(this->current_file_));
+  ESP_LOGVV(TAG, "Current File Set to %s", this->current_file_.path.c_str());
+}
+
+uint8_t StorageClient::read() {
+  if (this->current_storage_) {
+    ESP_LOGVV(TAG, "Reading File: %s", this->current_file_.path.c_str());
+    this->current_storage_->set_file(&(this->current_file_));
+    return current_storage_->read();
+  } else {
+    ESP_LOGE(TAG, "File has not been set");
+    return 0;
   }
 }
 
-std::vector<uint8_t> StorageFile::read_direct() {
-  if (!is_sd_direct() || !sd_component_) {
-    return {};
+void StorageClient::set_read_offset(size_t offset) {
+  if (this->current_storage_) {
+    this->current_file_.read_offset = offset;
+  } else {
+    ESP_LOGE(TAG, "File has not been set");
   }
-  
-  ESP_LOGD(TAG, "Reading file %s directly from SD", path_.c_str());
-  return sd_component_->read_file(path_);
 }
 
-bool StorageFile::read_audio_chunk(size_t offset, uint8_t* buffer, size_t buffer_size, size_t& bytes_read) {
-  if (!is_sd_direct() || !sd_component_) {
-    return false;
+bool StorageClient::write(uint8_t data) {
+  if (current_storage_) {
+    this->current_storage_->set_file(&(this->current_file_));
+    return current_storage_->write(data);
+  } else {
+    ESP_LOGE(TAG, "File has not been set");
+    return 0;
   }
-  
-  // Lecture directe chunk par chunk pour audio en utilisant votre méthode existante
-  auto chunk_data = sd_component_->read_file_chunked(path_, offset, buffer_size);
-  bytes_read = chunk_data.size();
-  
-  if (bytes_read > 0) {
-    memcpy(buffer, chunk_data.data(), bytes_read);
-    current_position_ = offset + bytes_read;
-    return true;
+}
+
+bool StorageClient::append(uint8_t data) {
+  if (current_storage_) {
+    this->current_storage_->set_file(&(this->current_file_));
+    return current_storage_->append(data);
+  } else {
+    ESP_LOGE(TAG, "File has not been set");
+    return 0;
   }
-  
-  return false;
 }
 
-size_t StorageFile::get_file_size_direct() const {
-  if (!file_size_cached_) {
-    if (is_sd_direct() && sd_component_) {
-      cached_file_size_ = sd_component_->file_size(path_);
-    } else {
-      cached_file_size_ = 0;
-    }
-    file_size_cached_ = true;
+size_t StorageClient::read_array(uint8_t *data, size_t data_length) {
+  if (current_storage_) {
+    ESP_LOGVV(TAG, "Reading File: %s", this->current_file_.path.c_str());
+    this->current_storage_->set_file(&(this->current_file_));
+    return current_storage_->read_array(data, data_length);
+  } else {
+    ESP_LOGE(TAG, "File has not been set");
+    return 0;
   }
-  return cached_file_size_;
 }
 
-bool StorageFile::file_exists_direct() const {
-  if (!is_sd_direct() || !sd_component_) {
-    return false;
+bool StorageClient::write_array(uint8_t *data, size_t data_length) {
+  if (current_storage_) {
+    this->current_storage_->set_file(&(this->current_file_));
+    return current_storage_->write_array(data, data_length);
+  } else {
+    ESP_LOGE(TAG, "File has not been set");
+    return 0;
   }
-  
-  return sd_component_->file_size(path_) > 0;
 }
 
-// ===========================================
-// Implémentation StorageComponent
-// ===========================================
-
-void StorageComponent::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up Storage Component...");
-  
-  // Configurer l'instance globale pour hooks
-  StorageComponent::set_global_instance(this);
-  
-  if (platform_ == "sd_card" || platform_ == "sd_direct") {
-    setup_sd_direct();
-  } else if (platform_ == "flash") {
-    setup_flash();
-  } else if (platform_ == "inline") {
-    setup_inline();
+bool StorageClient::append_array(uint8_t *data, size_t data_length) {
+  if (current_storage_) {
+    this->current_storage_->set_file(&(this->current_file_));
+    return current_storage_->append_array(data, data_length);
+  } else {
+    ESP_LOGE(TAG, "File has not been set");
+    return 0;
   }
-  
-  ESP_LOGCONFIG(TAG, "Storage Component setup complete. Platform: %s, Files: %zu", 
-                platform_.c_str(), files_.size());
 }
 
-void StorageComponent::setup_sd_direct() {
-  ESP_LOGCONFIG(TAG, "Configuring SD direct access...");
-  
-  if (!sd_component_) {
-    ESP_LOGE(TAG, "SD component not set for SD direct platform!");
-    return;
-  }
-  
-  // Configurer tous les fichiers pour SD direct
-  for (auto *file : files_) {
-    file->set_sd_component(sd_component_);
-    file->set_platform("sd_direct");
-    ESP_LOGD(TAG, "Configured file %s for SD direct access", file->get_path().c_str());
-  }
-  
-  platform_ = "sd_direct";
-  ESP_LOGI(TAG, "SD direct access enabled - files read directly from SD without flash usage");
-}
+std::map<std::string, Storage *> StorageClient::storages = {};
 
-void StorageComponent::setup_sd_card() {
-  // Ancienne méthode - on redirige vers sd_direct
-  ESP_LOGW(TAG, "sd_card platform deprecated, using sd_direct instead");
-  setup_sd_direct();
-}
-
-void StorageComponent::setup_flash() {
-  ESP_LOGCONFIG(TAG, "Using flash storage (embedded files)");
-  // Implementation existante pour flash
-}
-
-void StorageComponent::setup_inline() {
-  ESP_LOGCONFIG(TAG, "Using inline storage");
-  // Implementation existante pour inline
-}
-
-std::string StorageComponent::get_file_path(const std::string &file_id) const {
-  for (const auto *file : files_) {
-    if (file->get_id() == file_id) {
-      return file->get_path();
-    }
-  }
-  return "";
-}
-
-StorageFile* StorageComponent::get_file_by_path(const std::string &path) {
-  for (auto *file : files_) {
-    if (file->get_path() == path) {
-      return file;
-    }
-  }
-  return nullptr;
-}
-
-std::vector<uint8_t> StorageComponent::read_file_direct(const std::string &path) {
-  if (!sd_component_) {
-    return {};
-  }
-  
-  ESP_LOGD(TAG, "Reading file %s directly from SD", path.c_str());
-  return sd_component_->read_file(path);
-}
-
-bool StorageComponent::file_exists_direct(const std::string &path) {
-  if (!sd_component_) {
-    return false;
-  }
-  
-  return sd_component_->file_size(path) > 0;
-}
-
-void StorageComponent::stream_file_direct(const std::string &path, std::function<void(const uint8_t*, size_t)> callback) {
-  if (!sd_component_) {
-    ESP_LOGE(TAG, "SD component not available for streaming");
-    return;
-  }
-  
-  ESP_LOGD(TAG, "Streaming file %s directly from SD", path.c_str());
-  
-  // Utilise votre méthode read_file_stream existante
-  sd_component_->read_file_stream(path.c_str(), 0, 1024, callback);
-}
-
-// ===========================================
-// Hooks globaux pour bypass ESPHome
-// ===========================================
-
-std::vector<uint8_t> StorageGlobalHooks::intercept_file_read(const std::string &path) {
-  auto *storage = StorageComponent::get_global_instance();
-  if (!storage) return {};
-  
-  ESP_LOGD(TAG, "Intercepting file read: %s", path.c_str());
-  return storage->read_file_direct(path);
-}
-
-bool StorageGlobalHooks::intercept_file_exists(const std::string &path) {
-  auto *storage = StorageComponent::get_global_instance();
-  if (!storage) return false;
-  
-  return storage->file_exists_direct(path);
-}
-
-void StorageGlobalHooks::intercept_file_stream(const std::string &path, std::function<void(const uint8_t*, size_t)> callback) {
-  auto *storage = StorageComponent::get_global_instance();
-  if (!storage) return;
-  
-  storage->stream_file_direct(path, callback);
+void StorageClient::add_storage(Storage *storage_inst, std::string prefix) {
+  StorageClient::storages[prefix] = storage_inst;
 }
 
 }  // namespace storage
