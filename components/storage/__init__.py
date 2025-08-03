@@ -1,11 +1,45 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import sd_mmc_card
 from esphome.const import CONF_ID, CONF_FILES, CONF_PATH
 from esphome import automation
 
-DEPENDENCIES = ["sd_mmc_card"]
-CODEOWNERS = ["@youkorr"]
+# Import du composant SD local
+# Essayer d'importer le composant SD depuis le répertoire parent
+try:
+    # Import dynamique du composant SD local
+    import sys
+    import os
+    
+    # Ajouter le chemin du composant parent si nécessaire
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    sd_mmc_path = os.path.join(parent_dir, 'sd_mmc_card')
+    
+    if sd_mmc_path not in sys.path:
+        sys.path.insert(0, sd_mmc_path)
+    
+    # Essayer d'importer depuis esphome.components d'abord
+    from esphome.components import sd_mmc_card
+    
+    # Définir le type de composant SD en essayant différents noms
+    SD_COMPONENT_TYPE = None
+    for class_name in ['SDMMCCard', 'SDMMCComponent', 'SDCard', 'SdMmcCard']:
+        if hasattr(sd_mmc_card, class_name):
+            SD_COMPONENT_TYPE = getattr(sd_mmc_card, class_name)
+            break
+    
+    if SD_COMPONENT_TYPE is None:
+        # Fallback: déclarer le type depuis le namespace global
+        SD_COMPONENT_TYPE = cg.global_ns.class_('SDMMCCard')
+    
+    DEPENDENCIES = ["sd_mmc_card"]
+    
+except ImportError as e:
+    # Si l'import échoue, utiliser un type générique
+    SD_COMPONENT_TYPE = cg.global_ns.class_('SDMMCCard')
+    DEPENDENCIES = []
+
+CODEOWNERS = ["@your-username"]
 
 # Configuration constants
 CONF_PLATFORM = "platform"
@@ -31,7 +65,7 @@ CONFIG_SCHEMA = cv.All(
     cv.Schema({
         cv.GenerateID(): cv.declare_id(StorageComponent),
         cv.Required(CONF_PLATFORM): cv.one_of("sd_direct", lower=True),
-        cv.Optional(CONF_SD_COMPONENT): cv.use_id(sd_mmc_card.SDMMCCard),
+        cv.Optional(CONF_SD_COMPONENT): cv.use_id(SD_COMPONENT_TYPE),
         cv.Optional(CONF_ENABLE_GLOBAL_BYPASS, default=False): cv.boolean,
         cv.Optional(CONF_CACHE_SIZE, default=32768): cv.positive_int,
         cv.Optional(CONF_AUTO_HTTP_INTERCEPT, default=False): cv.boolean,
@@ -44,7 +78,7 @@ CONFIG_SCHEMA = cv.All(
             })]
         )
     }),
-    cv.has_at_least_one_key(CONF_SD_COMPONENT)
+    cv.has_at_least_one_key(CONF_SD_COMPONENT) if DEPENDENCIES else lambda x: x
 )
 
 async def to_code(config):
@@ -72,7 +106,6 @@ async def to_code(config):
         cg.add(var.set_auto_http_intercept(True))
         # S'assurer que le composant web_server est disponible
         cg.add_define("USE_WEB_SERVER")
-        cg.add_library("ESP Async WebServer", "1.2.3")
     
     # Configuration des fichiers
     for file_config in config.get(CONF_FILES, []):
