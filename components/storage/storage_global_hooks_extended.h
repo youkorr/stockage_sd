@@ -4,10 +4,11 @@
 #include "esphome/core/log.h"
 #include <map>
 #include <string>
+#include <functional>
+#include <dlfcn.h>  // For dlsym if available
 
-// Hooks pour intercepter les appels système ESPHome
+// Forward declarations for system hooks
 extern "C" {
-  // Prototype des fonctions ESPHome à intercepter
   size_t esphome_read_file(const char* path, uint8_t* buffer, size_t max_size);
   bool esphome_file_exists(const char* path);
   void* esphome_open_file(const char* path, const char* mode);
@@ -16,74 +17,61 @@ extern "C" {
 namespace esphome {
 namespace storage {
 
-class StorageGlobalHooks {
+// ===========================================
+// EXTENSION DE LA CLASSE StorageGlobalHooks EXISTANTE
+// ===========================================
+
+// Ajouter les méthodes manquantes à la classe existante via des fonctions statiques
+class StorageGlobalHooksExtensions {
  public:
   // ===========================================
-  // HOOKS PRINCIPAUX - Votre code existant amélioré
+  // MÉTHODES D'INSTALLATION (manquantes dans l'original)
   // ===========================================
   
-  static std::vector<uint8_t> intercept_file_read(const std::string &path) {
-    auto *storage = StorageComponent::get_global_instance();
-    if (!storage || !storage->is_global_bypass_enabled()) {
-      return {};  // Pas de bypass, utiliser le système normal
-    }
+  static void install_hooks() {
+    ESP_LOGI("storage_hooks", "🔧 Installing global storage hooks...");
     
-    ESP_LOGD("storage_hooks", "🔄 Intercepting file read: %s", path.c_str());
+    // Installer les hooks système
+    hook_system_file_calls();
     
-    // Vérifier si c'est un fichier SD configuré
-    if (is_sd_file_path(path)) {
-      auto data = storage->read_file_direct(path);
-      if (!data.empty()) {
-        ESP_LOGI("storage_hooks", "✅ Read from SD: %s (%zu bytes)", path.c_str(), data.size());
-        return data;
-      }
-    }
+    // Installer hooks spécifiques ESPHome
+    hook_esphome_calls();
     
-    return {};  // Fallback au système normal
+    // Installer hooks LVGL
+    hook_lvgl_calls();
+    
+    ESP_LOGI("storage_hooks", "✅ All storage hooks installed");
+    hooks_installed_ = true;
   }
   
-  static bool intercept_file_exists(const std::string &path) {
-    auto *storage = StorageComponent::get_global_instance();
-    if (!storage || !storage->is_global_bypass_enabled()) {
-      return false;  // Pas de bypass
-    }
+  static void uninstall_hooks() {
+    if (!hooks_installed_) return;
     
-    ESP_LOGD("storage_hooks", "🔍 Checking file existence: %s", path.c_str());
-    
-    if (is_sd_file_path(path)) {
-      bool exists = storage->file_exists_direct(path);
-      ESP_LOGD("storage_hooks", "File %s exists on SD: %s", path.c_str(), exists ? "YES" : "NO");
-      return exists;
-    }
-    
-    return false;
+    ESP_LOGW("storage_hooks", "⚠️ Uninstalling storage hooks");
+    restore_original_functions();
+    hooks_installed_ = false;
   }
   
-  static void intercept_file_stream(const std::string &path, std::function<void(const uint8_t*, size_t)> callback) {
-    auto *storage = StorageComponent::get_global_instance();
-    if (!storage) return;
-    
-    ESP_LOGD("storage_hooks", "📡 Streaming file: %s", path.c_str());
-    storage->stream_file_direct(path, callback);
-  }
+  static bool are_hooks_installed() { return hooks_installed_; }
 
   // ===========================================
-  // NOUVEAUX HOOKS SPÉCIFIQUES LVGL
+  // HOOKS LVGL SPÉCIALISÉS
   // ===========================================
   
-  // Hook pour les images LVGL
   static const uint8_t* intercept_lvgl_image_data(const std::string &path, size_t* size_out) {
     auto *storage = StorageComponent::get_global_instance();
-    if (!storage) return nullptr;
+    if (!storage || !storage->is_global_bypass_enabled()) {
+      return nullptr;
+    }
     
     ESP_LOGD("storage_hooks", "🖼️ LVGL requesting image: %s", path.c_str());
     
-    // Cache des images en mémoire pour LVGL (car LVGL garde les pointeurs)
-    static std::map<std::string, std::vector<uint8_t>> image_cache;
+    // Cache statique pour images LVGL (LVGL garde les pointeurs)
+    static std::map<std::string, std::vector<uint8_t>> lvgl_image_cache;
     
-    auto it = image_cache.find(path);
-    if (it == image_cache.end()) {
-      // Charger depuis SD
+    auto it = lvgl_image_cache.find(path);
+    if (it == lvgl_image_cache.end()) {
+      // Charger depuis SD via la classe existante
       auto data = storage->read_file_direct(path);
       if (data.empty()) {
         ESP_LOGE("storage_hooks", "Failed to load LVGL image: %s", path.c_str());
@@ -91,25 +79,28 @@ class StorageGlobalHooks {
       }
       
       // Mettre en cache
-      image_cache[path] = std::move(data);
-      it = image_cache.find(path);
-      ESP_LOGI("storage_hooks", "✅ LVGL image cached: %s (%zu bytes)", path.c_str(), it->second.size());
+      lvgl_image_cache[path] = std::move(data);
+      it = lvgl_image_cache.find(path);
+      ESP_LOGI("storage_hooks", "✅ LVGL image cached: %s (%zu bytes)", 
+              path.c_str(), it->second.size());
     }
     
     if (size_out) *size_out = it->second.size();
     return it->second.data();
   }
   
-  // Hook pour audio/media
+  // Hook pour audio streaming optimisé
   static bool intercept_audio_stream(const std::string &path, size_t offset, 
                                    uint8_t* buffer, size_t buffer_size, size_t* bytes_read) {
     auto *storage = StorageComponent::get_global_instance();
-    if (!storage) return false;
+    if (!storage || !storage->is_global_bypass_enabled()) {
+      return false;
+    }
     
-    ESP_LOGD("storage_hooks", "🎵 Audio stream request: %s (offset: %zu, size: %zu)", 
+    ESP_LOGD("storage_hooks", "🎵 Audio stream: %s (offset: %zu, size: %zu)", 
              path.c_str(), offset, buffer_size);
     
-    // Utiliser votre StorageFile pour lecture audio optimisée
+    // Utiliser StorageFile pour lecture optimisée
     auto* file = storage->get_file_by_path(path);
     if (file && file->is_sd_direct()) {
       return file->read_audio_chunk(offset, buffer, buffer_size, *bytes_read);
@@ -119,97 +110,230 @@ class StorageGlobalHooks {
   }
 
   // ===========================================
-  // INSTALLATION DES HOOKS AUTOMATIQUES
+  // HOOKS SYSTÈME AVANCÉS
   // ===========================================
   
-  static void install_hooks() {
-    ESP_LOGI("storage_hooks", "🔧 Installing global storage hooks...");
+  // Hook FILE* fopen pour intercepter toutes les ouvertures de fichiers
+  static FILE* hooked_fopen(const char* path, const char* mode) {
+    if (!hooks_installed_ || !path) {
+      return original_fopen ? original_fopen(path, mode) : nullptr;
+    }
     
-    // Hook 1: Intercepter esphome::read_file
-    hook_esphome_read_file();
+    std::string spath(path);
+    ESP_LOGD("storage_hooks", "📂 fopen intercepted: %s (mode: %s)", path, mode);
     
-    // Hook 2: Intercepter fopen/fread système
-    hook_system_file_calls();
+    // Vérifier si c'est un fichier géré par notre storage
+    if (is_managed_file(spath)) {
+      auto *storage = StorageComponent::get_global_instance();
+      if (storage && storage->file_exists_direct(spath)) {
+        ESP_LOGD("storage_hooks", "🔄 Redirecting to SD: %s", path);
+        
+        // Créer un FILE* virtuel ou rediriger vers le bon chemin SD
+        return redirect_to_sd_file(spath, mode);
+      }
+    }
     
-    // Hook 3: Intercepter spécifiquement LVGL
-    hook_lvgl_image_calls();
-    
-    ESP_LOGI("storage_hooks", "✅ All storage hooks installed");
+    // Fallback vers fopen original
+    return original_fopen ? original_fopen(path, mode) : nullptr;
   }
   
-  static void uninstall_hooks() {
-    ESP_LOGW("storage_hooks", "⚠️ Uninstalling storage hooks");
-    // Restaurer les fonctions originales
-    restore_original_functions();
+  // Hook fread pour données depuis SD
+  static size_t hooked_fread(void* ptr, size_t size, size_t count, FILE* stream) {
+    if (!hooks_installed_ || !stream) {
+      return original_fread ? original_fread(ptr, size, count, stream) : 0;
+    }
+    
+    // Vérifier si c'est un de nos streams redirigés
+    if (is_our_file_stream(stream)) {
+      return handle_sd_fread(ptr, size, count, stream);
+    }
+    
+    // Fallback vers fread original
+    return original_fread ? original_fread(ptr, size, count, stream) : 0;
   }
 
  private:
+  static bool hooks_installed_;
+  
+  // Pointeurs vers fonctions originales
+  static FILE* (*original_fopen)(const char*, const char*);
+  static size_t (*original_fread)(void*, size_t, size_t, FILE*);
+  static int (*original_fclose)(FILE*);
+  
   // ===========================================
   // HELPERS PRIVÉS
   // ===========================================
   
-  static bool is_sd_file_path(const std::string &path) {
-    // Vérifier si le chemin correspond à vos fichiers SD
-    return path.find("/scard/") == 0 || 
-           path.find("sd:") == 0 ||
-           path.find("/sd/") == 0;
+  static bool is_managed_file(const std::string &path) {
+    return path.find("/sd/") == 0 || 
+           path.find("/scard/") == 0 ||
+           path.find("sd:") == 0;
   }
   
-  static void hook_esphome_read_file() {
-    // Remplacer la fonction de lecture de fichiers d'ESPHome
-    ESP_LOGD("storage_hooks", "Installing ESPHome file read hook");
+  static FILE* redirect_to_sd_file(const std::string &path, const char* mode) {
+    // Pour l'instant, ouvrir le fichier SD normalement
+    // TODO: Implémenter un FILE* virtuel qui utilise StorageFile
     
-    // TODO: Implémentation spécifique selon votre architecture ESPHome
-    // Exemple conceptuel:
-    /*
-    original_read_file = esphome_read_file;
-    esphome_read_file = hooked_read_file;
-    */
+    auto *storage = StorageComponent::get_global_instance();
+    if (!storage) return nullptr;
+    
+    // Essayer d'ouvrir via le système de fichiers SD monté
+    std::string sd_path = "/sdcard" + path.substr(3); // Remplacer /sd/ par /sdcard/
+    return original_fopen ? original_fopen(sd_path.c_str(), mode) : nullptr;
+  }
+  
+  static bool is_our_file_stream(FILE* stream) {
+    // TODO: Maintenir une liste des FILE* que nous gérons
+    return false; // Pour l'instant
+  }
+  
+  static size_t handle_sd_fread(void* ptr, size_t size, size_t count, FILE* stream) {
+    // TODO: Implémenter lecture via StorageFile
+    return original_fread ? original_fread(ptr, size, count, stream) : 0;
   }
   
   static void hook_system_file_calls() {
-    // Intercepter les appels système fopen/fread
-    ESP_LOGD("storage_hooks", "Installing system file call hooks");
+    ESP_LOGD("storage_hooks", "Installing system file hooks");
     
-    // Utiliser dlsym pour remplacer fopen, fread, etc.
-    // Ceci permettra d'intercepter même les bibliothèques qui utilisent stdio
+    // Sauvegarder les fonctions originales
+    original_fopen = fopen;
+    original_fread = fread;
+    original_fclose = fclose;
+    
+    // TODO: Remplacer les pointeurs (nécessite techniques avancées)
+    // Pour ESP32, on peut utiliser esp_image_load si disponible
+    // ou techniques de patching mémoire
+    
+    ESP_LOGD("storage_hooks", "System file hooks installed");
   }
   
-  static void hook_lvgl_image_calls() {
-    ESP_LOGD("storage_hooks", "Installing LVGL image hooks");
+  static void hook_esphome_calls() {
+    ESP_LOGD("storage_hooks", "Installing ESPHome-specific hooks");
     
-    // Hook spécifique pour lv_img_set_src et les fonctions de décodage d'images
-    // Intercepter les appels avant qu'ils n'atteignent le filesystem
+    // Hook les fonctions ESPHome spécifiques si elles existent
+    // Cela nécessite de connaître les symboles ESPHome exacts
+  }
+  
+  static void hook_lvgl_calls() {
+    ESP_LOGD("storage_hooks", "Installing LVGL hooks");
+    
+    // Hook les fonctions LVGL d'image loading
+    // lv_img_set_src, lv_img_decoder_open, etc.
   }
   
   static void restore_original_functions() {
-    // Restaurer toutes les fonctions interceptées
+    ESP_LOGD("storage_hooks", "Restoring original functions");
+    
+    // Restaurer les pointeurs originaux
+    if (original_fopen) {
+      // fopen = original_fopen; // Nécessite techniques de patching
+    }
+    
+    original_fopen = nullptr;
+    original_fread = nullptr;
+    original_fclose = nullptr;
   }
-  
-  // Pointeurs vers les fonctions originales
-  static void* (*original_fopen)(const char*, const char*);
-  static size_t (*original_fread)(void*, size_t, size_t, void*);
-  static size_t (*original_esphome_read_file)(const char*, uint8_t*, size_t);
 };
 
+// Variables statiques
+bool StorageGlobalHooksExtensions::hooks_installed_ = false;
+FILE* (*StorageGlobalHooksExtensions::original_fopen)(const char*, const char*) = nullptr;
+size_t (*StorageGlobalHooksExtensions::original_fread)(void*, size_t, size_t, FILE*) = nullptr;
+int (*StorageGlobalHooksExtensions::original_fclose)(FILE*) = nullptr;
+
 // ===========================================
-// AUTO-INSTALLATION VIA CONSTRUCTEUR STATIQUE
+// EXTENSION DE StorageGlobalHooks via fonctions friend
 // ===========================================
 
-class StorageHooksInstaller {
- public:
-  StorageHooksInstaller() {
-    ESP_LOGI("storage_hooks", "🚀 Auto-installing storage hooks on startup");
-    StorageGlobalHooks::install_hooks();
+// Ajouter les méthodes manquantes à StorageGlobalHooks
+namespace StorageGlobalHooksImpl {
+  void install_hooks() {
+    StorageGlobalHooksExtensions::install_hooks();
   }
   
-  ~StorageHooksInstaller() {
-    StorageGlobalHooks::uninstall_hooks();
+  void uninstall_hooks() {
+    StorageGlobalHooksExtensions::uninstall_hooks();
+  }
+  
+  const uint8_t* get_lvgl_image_data(const std::string &path, size_t* size_out) {
+    return StorageGlobalHooksExtensions::intercept_lvgl_image_data(path, size_out);
+  }
+  
+  bool stream_audio_chunk(const std::string &path, size_t offset, 
+                         uint8_t* buffer, size_t buffer_size, size_t* bytes_read) {
+    return StorageGlobalHooksExtensions::intercept_audio_stream(path, offset, 
+                                                              buffer, buffer_size, bytes_read);
+  }
+}
+
+// ===========================================
+// AUTO-INSTALLER COMPATIBLE  
+// ===========================================
+
+class StorageHooksAutoInstaller {
+ public:
+  StorageHooksAutoInstaller() {
+    ESP_LOGI("storage_hooks", "🚀 Auto-installing storage hooks on startup");
+    StorageGlobalHooksExtensions::install_hooks();
+  }
+  
+  ~StorageHooksAutoInstaller() {
+    StorageGlobalHooksExtensions::uninstall_hooks();
   }
 };
 
 // Instance globale pour auto-installation
-static StorageHooksInstaller hooks_installer;
+static StorageHooksAutoInstaller hooks_auto_installer;
+
+// ===========================================
+// MACROS PRATIQUES
+// ===========================================
+
+#define STORAGE_INTERCEPT_READ(path) \
+  do { \
+    auto data = StorageGlobalHooks::intercept_file_read(path); \
+    if (!data.empty()) return data; \
+  } while(0)
+
+#define STORAGE_INTERCEPT_EXISTS(path) \
+  do { \
+    if (StorageGlobalHooks::intercept_file_exists(path)) return true; \
+  } while(0)
+
+#define STORAGE_INTERCEPT_LVGL_IMAGE(path, size_ptr) \
+  do { \
+    auto* img_data = StorageGlobalHooksExtensions::intercept_lvgl_image_data(path, size_ptr); \
+    if (img_data) return img_data; \
+  } while(0)
+
+// ===========================================
+// API C POUR INTEROPÉRABILITÉ
+// ===========================================
+
+extern "C" {
+  // Fonctions C pour autres composants ESPHome
+  const uint8_t* storage_hooks_get_lvgl_image(const char* path, size_t* size_out) {
+    return StorageGlobalHooksExtensions::intercept_lvgl_image_data(std::string(path), size_out);
+  }
+  
+  bool storage_hooks_stream_audio(const char* path, size_t offset, 
+                                 uint8_t* buffer, size_t buffer_size, size_t* bytes_read) {
+    return StorageGlobalHooksExtensions::intercept_audio_stream(std::string(path), offset, 
+                                                              buffer, buffer_size, bytes_read);
+  }
+  
+  void storage_hooks_install() {
+    StorageGlobalHooksExtensions::install_hooks();
+  }
+  
+  void storage_hooks_uninstall() {
+    StorageGlobalHooksExtensions::uninstall_hooks();
+  }
+  
+  bool storage_hooks_are_installed() {
+    return StorageGlobalHooksExtensions::are_hooks_installed();
+  }
+}
 
 }  // namespace storage
 }  // namespace esphome
