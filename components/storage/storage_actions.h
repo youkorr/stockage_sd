@@ -1,7 +1,6 @@
 #pragma once
 #include "esphome/core/automation.h"
 #include "esphome/core/component.h"
-#include "esphome/components/web_server_base/web_server_base.h"
 #include "storage.h"
 #include "../sd_mmc_card/sd_mmc_card.h"
 
@@ -40,104 +39,6 @@ class StorageStreamFileAction : public Action<Ts...> {
 
  protected:
   StorageComponent *parent_;
-};
-
-// Action pour streaming HTTP simulé depuis SD (déclaration complète)
-template<typename... Ts>
-class StorageHTTPStreamAction : public StorageStreamFileAction<Ts...> {
- public:
-  StorageHTTPStreamAction(StorageComponent *parent) : StorageStreamFileAction<Ts...>(parent) {}
-  
-  TEMPLATABLE_VALUE(std::string, endpoint_url)
-  TEMPLATABLE_VALUE(uint16_t, port)
-  
-  void play(Ts... x) override {
-    auto path = this->file_path_.value(x...);
-    
-    // Si endpoint_url n'est pas défini, on en génère un automatiquement
-    std::string endpoint = "/stream/" + this->extract_filename(path);
-    uint16_t port = 80;
-    
-    if (this->endpoint_url_.has_value()) {
-      endpoint = this->endpoint_url_.value(x...);
-    }
-    if (this->port_.has_value()) {
-      port = this->port_.value(x...);
-    }
-    
-    ESP_LOGD("storage_http", "Starting HTTP stream for %s on %s:%d", 
-             path.c_str(), endpoint.c_str(), port);
-    
-    // Simuler un streaming HTTP
-    this->stream_with_http_headers(path, endpoint);
-  }
-  
-  void on_chunk_received(const uint8_t* data, size_t len) override {
-    // Traitement spécifique HTTP
-    if (this->http_callback_) {
-      this->http_callback_(data, len);
-    } else {
-      // Fallback vers comportement parent
-      StorageStreamFileAction<Ts...>::on_chunk_received(data, len);
-    }
-  }
-  
-  void set_http_callback(std::function<void(const uint8_t*, size_t)> callback) {
-    http_callback_ = callback;
-  }
-  
-  void set_web_server(void *server) {
-    web_server_base_ = server;
-  }
-  
- protected:
-  void stream_with_http_headers(const std::string& file_path, const std::string& endpoint) {
-    // Générer headers HTTP
-    std::string http_headers = this->generate_http_headers(file_path);
-    
-    ESP_LOGD("storage_http", "HTTP endpoint ready: %s", endpoint.c_str());
-    ESP_LOGD("storage_http", "Headers: %s", http_headers.c_str());
-    
-    // Simuler l'envoi des headers
-    if (this->http_callback_) {
-      this->http_callback_(reinterpret_cast<const uint8_t*>(http_headers.c_str()), 
-                          http_headers.length());
-    }
-    
-    // Stream le fichier depuis SD
-    StorageStreamFileAction<Ts...>::play();
-  }
-  
-  std::string generate_http_headers(const std::string& file_path) {
-    std::string content_type = this->get_mime_type(file_path);
-    
-    return "HTTP/1.1 200 OK\r\n"
-           "Content-Type: " + content_type + "\r\n"
-           "Cache-Control: no-cache\r\n"
-           "Connection: close\r\n"
-           "Access-Control-Allow-Origin: *\r\n"
-           "Transfer-Encoding: chunked\r\n"
-           "\r\n";
-  }
-  
-  std::string get_mime_type(const std::string& file_path) {
-    if (file_path.find(".jpg") != std::string::npos || 
-        file_path.find(".jpeg") != std::string::npos) return "image/jpeg";
-    if (file_path.find(".png") != std::string::npos) return "image/png";
-    if (file_path.find(".gif") != std::string::npos) return "image/gif";
-    if (file_path.find(".bmp") != std::string::npos) return "image/bmp";
-    if (file_path.find(".webp") != std::string::npos) return "image/webp";
-    return "application/octet-stream";
-  }
-  
-  std::string extract_filename(const std::string& path) {
-    size_t pos = path.find_last_of("/\\");
-    return (pos != std::string::npos) ? path.substr(pos + 1) : path;
-  }
-
- private:
-  std::function<void(const uint8_t*, size_t)> http_callback_;
-  void *web_server_base_{nullptr};
 };
 
 // Action pour lecture complète de fichier
@@ -202,36 +103,28 @@ class StorageStreamAudioAction : public StorageStreamFileAction<Ts...> {
   std::function<void(const uint8_t*, size_t)> audio_callback_;
 };
 
-// Action pour gestion d'images depuis SD avec simulation HTTP
+// Action pour gestion d'images depuis SD
 template<typename... Ts>
-class StorageStreamImageAction : public StorageHTTPStreamAction<Ts...> {
+class StorageStreamImageAction : public StorageStreamFileAction<Ts...> {
  public:
-  StorageStreamImageAction(StorageComponent *parent) : StorageHTTPStreamAction<Ts...>(parent) {}
+  StorageStreamImageAction(StorageComponent *parent) : StorageStreamFileAction<Ts...>(parent) {}
   
   void play(Ts... x) override {
     auto path = this->file_path_.value(x...);
     
-    ESP_LOGD("storage_http_image", "Streaming image %s via simulated HTTP", path.c_str());
+    ESP_LOGD("storage_image", "Streaming image %s from SD", path.c_str());
     
-    // Générer endpoint automatique pour l'image
-    std::string image_endpoint = "/image/stream/" + this->generate_image_id(path);
-    
-    // Configurer l'endpoint
-    if (!this->endpoint_url_.has_value()) {
-      this->endpoint_url_ = image_endpoint;
-    }
-    
-    // Appeler la méthode parent avec simulation HTTP
-    StorageHTTPStreamAction<Ts...>::play(x...);
+    // Appeler la méthode parent pour streamer l'image
+    StorageStreamFileAction<Ts...>::play(x...);
   }
   
   void on_chunk_received(const uint8_t* data, size_t len) override {
-    // Traitement optimisé pour images avec headers HTTP
+    // Traitement optimisé pour images
     if (this->image_callback_) {
       this->image_callback_(data, len);
     } else {
-      // Fallback vers traitement HTTP standard
-      StorageHTTPStreamAction<Ts...>::on_chunk_received(data, len);
+      // Fallback vers traitement standard
+      StorageStreamFileAction<Ts...>::on_chunk_received(data, len);
     }
   }
   
@@ -241,24 +134,6 @@ class StorageStreamImageAction : public StorageHTTPStreamAction<Ts...> {
 
  private:
   std::function<void(const uint8_t*, size_t)> image_callback_;
-  
-  std::string generate_image_id(const std::string& path) {
-    // Générer un ID unique et lisible pour l'image
-    std::string filename = this->extract_filename(path);
-    
-    // Retirer l'extension
-    size_t dot_pos = filename.find_last_of(".");
-    if (dot_pos != std::string::npos) {
-      filename = filename.substr(0, dot_pos);
-    }
-    
-    // Remplacer les caractères spéciaux
-    for (char& c : filename) {
-      if (!std::isalnum(c)) c = '_';
-    }
-    
-    return filename;
-  }
 };
 
 // Action pour vérification d'existence de fichier
@@ -291,6 +166,57 @@ class StorageFileExistsAction : public Action<Ts...> {
   std::function<void(bool)> exists_callback_;
 };
 
+// Action pour copier un fichier de la SD vers un fichier temporaire
+template<typename... Ts>
+class StorageCopyToTempAction : public Action<Ts...> {
+ public:
+  StorageCopyToTempAction(StorageComponent *parent) : parent_(parent) {}
+  
+  TEMPLATABLE_VALUE(std::string, source_path)
+  TEMPLATABLE_VALUE(std::string, dest_path)
+  
+  void play(Ts... x) override {
+    auto src = this->source_path_.value(x...);
+    auto dest = this->dest_path_.value(x...);
+    
+    ESP_LOGD("storage_action", "Copying file %s to %s", src.c_str(), dest.c_str());
+    
+    // Lire le fichier depuis la SD
+    auto data = this->parent_->read_file_direct(src);
+    if (data.empty()) {
+      ESP_LOGE("storage_action", "Failed to read source file %s", src.c_str());
+      return;
+    }
+    
+    // Créer le répertoire de destination si nécessaire
+    std::string dir = dest.substr(0, dest.find_last_of("/"));
+    if (!dir.empty()) {
+      mkdir(dir.c_str(), 0755);
+    }
+    
+    // Écrire le fichier de destination
+    FILE* f = fopen(dest.c_str(), "wb");
+    if (!f) {
+      ESP_LOGE("storage_action", "Failed to create destination file %s: %s", dest.c_str(), strerror(errno));
+      return;
+    }
+    
+    size_t written = fwrite(data.data(), 1, data.size(), f);
+    fclose(f);
+    
+    if (written != data.size()) {
+      ESP_LOGE("storage_action", "Failed to write all data: %zu of %zu bytes", written, data.size());
+    } else {
+      ESP_LOGI("storage_action", "File copied successfully: %zu bytes", data.size());
+    }
+  }
+  
+  void set_parent(StorageComponent *parent) { parent_ = parent; }
+
+ protected:
+  StorageComponent *parent_;
+};
+
 // Factory pour créer les actions
 class StorageActionFactory {
  public:
@@ -310,8 +236,12 @@ class StorageActionFactory {
     return std::make_unique<StorageStreamImageAction<>>(parent);
   }
   
-  static std::unique_ptr<StorageHTTPStreamAction<>> create_http_stream_action(StorageComponent *parent) {
-    return std::make_unique<StorageHTTPStreamAction<>>(parent);
+  static std::unique_ptr<StorageFileExistsAction<>> create_file_exists_action(StorageComponent *parent) {
+    return std::make_unique<StorageFileExistsAction<>>(parent);
+  }
+  
+  static std::unique_ptr<StorageCopyToTempAction<>> create_copy_to_temp_action(StorageComponent *parent) {
+    return std::make_unique<StorageCopyToTempAction<>>(parent);
   }
 };
 
