@@ -100,6 +100,18 @@ bool StorageFile::file_exists_direct() const {
   return sd_component_->file_size(path_) > 0;
 }
 
+std::string StorageFile::get_http_url() const {
+  // Extraire le nom du fichier du chemin
+  std::string filename = path_;
+  size_t pos = path_.find_last_of("/\\");
+  if (pos != std::string::npos) {
+    filename = path_.substr(pos + 1);
+  }
+  
+  // Générer une URL HTTP
+  return "/sd/" + filename;
+}
+
 // ===========================================
 // Implémentation StorageComponent
 // ===========================================
@@ -112,6 +124,11 @@ void StorageComponent::setup() {
   
   if (platform_ == "sd_card" || platform_ == "sd_direct") {
     setup_sd_direct();
+    
+    // Configurer le serveur HTTP si disponible
+    if (web_server_ != nullptr) {
+      setup_http_handlers();
+    }
   } else if (platform_ == "flash") {
     setup_flash();
   } else if (platform_ == "inline") {
@@ -237,6 +254,52 @@ void StorageComponent::stream_file_direct(const std::string &path, std::function
   
   // Utilise la méthode read_file_stream existante
   sd_component_->read_file_stream(path.c_str(), 0, 1024, callback);
+}
+
+std::string StorageComponent::get_http_url_for_file(const std::string &file_id) const {
+  StorageFile *file = nullptr;
+  for (auto *f : files_) {
+    if (f->get_id() == file_id) {
+      file = f;
+      break;
+    }
+  }
+  
+  if (!file) {
+    return "";
+  }
+  
+  // Construire l'URL complète avec l'adresse IP de l'ESP32
+  return "http://192.168.1.41" + file->get_http_url();
+}
+
+void StorageComponent::setup_http_handlers() {
+  if (!web_server_) {
+    ESP_LOGE(TAG, "Web server not available");
+    return;
+  }
+  
+  ESP_LOGI(TAG, "Setting up HTTP handlers for SD card files");
+  
+  // Enregistrer automatiquement tous les fichiers comme ressources HTTP
+  for (auto *file : files_) {
+    std::string path = file->get_path();
+    std::string url_path = file->get_http_url();
+    register_http_resource(path, url_path);
+    
+    ESP_LOGD(TAG, "Auto-registered file %s as HTTP resource at %s", path.c_str(), url_path.c_str());
+  }
+  
+  // Ici, nous devons ajouter les gestionnaires HTTP au serveur web
+  // Cette partie dépend de l'implémentation de votre web_server_base
+  // Pour l'instant, nous enregistrons juste les ressources
+  
+  ESP_LOGI(TAG, "HTTP handlers for SD card files registered");
+}
+
+void StorageComponent::register_http_resource(const std::string &path, const std::string &url_path) {
+  this->http_resources_[path] = url_path;
+  ESP_LOGD(TAG, "Registered HTTP resource: %s -> %s", path.c_str(), url_path.c_str());
 }
 
 // ===========================================
