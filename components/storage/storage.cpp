@@ -1,7 +1,6 @@
 #include "storage.h"
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
-#include <ESPAsyncWebServer.h>
 
 namespace esphome {
 namespace storage {
@@ -101,18 +100,6 @@ bool StorageFile::file_exists_direct() const {
   return sd_component_->file_size(path_) > 0;
 }
 
-std::string StorageFile::get_http_url() const {
-  // Extraire le nom du fichier du chemin
-  std::string filename = path_;
-  size_t pos = path_.find_last_of("/\\");
-  if (pos != std::string::npos) {
-    filename = path_.substr(pos + 1);
-  }
-  
-  // Générer une URL HTTP
-  return "/sd/" + filename;
-}
-
 // ===========================================
 // Implémentation StorageComponent
 // ===========================================
@@ -125,20 +112,6 @@ void StorageComponent::setup() {
   
   if (platform_ == "sd_card" || platform_ == "sd_direct") {
     setup_sd_direct();
-    
-    // Enregistrer automatiquement tous les fichiers comme ressources HTTP
-    if (web_server_ != nullptr) {
-      for (auto *file : files_) {
-        std::string path = file->get_path();
-        std::string url_path = file->get_http_url();
-        register_http_resource(path, url_path);
-        
-        ESP_LOGD(TAG, "Auto-registered file %s as HTTP resource at %s", path.c_str(), url_path.c_str());
-      }
-      
-      // Configurer les gestionnaires HTTP
-      setup_http_handlers(web_server_);
-    }
   } else if (platform_ == "flash") {
     setup_flash();
   } else if (platform_ == "inline") {
@@ -257,102 +230,6 @@ void StorageComponent::stream_file_direct(const std::string &path, std::function
   
   // Utilise la méthode read_file_stream existante
   sd_component_->read_file_stream(path.c_str(), 0, 1024, callback);
-}
-
-std::string StorageComponent::get_http_url_for_file(const std::string &file_id) const {
-  StorageFile *file = nullptr;
-  for (auto *f : files_) {
-    if (f->get_id() == file_id) {
-      file = f;
-      break;
-    }
-  }
-  
-  if (!file) {
-    return "";
-  }
-  
-  // Construire l'URL complète
-  return "http://" + get_base_url() + file->get_http_url();
-}
-
-void StorageComponent::setup_http_handlers(web_server_base::WebServerBase *web_server) {
-  this->web_server_ = web_server;
-  
-  // Récupérer le serveur AsyncWebServer sous-jacent
-  AsyncWebServer *server = web_server->get_server();
-  if (!server) {
-    ESP_LOGE(TAG, "Failed to get AsyncWebServer instance");
-    return;
-  }
-  
-  // Enregistrer un gestionnaire pour toutes les requêtes /sd/*
-  server->on("^\\/sd\\/(.+)$", HTTP_GET, [this](AsyncWebServerRequest *request) {
-    std::string url_path = request->url().c_str();
-    ESP_LOGD(TAG, "HTTP request for %s", url_path.c_str());
-    
-    // Extraire le nom du fichier de l'URL
-    std::string filename = url_path.substr(4); // Enlever "/sd/"
-    
-    // Essayer différentes variantes de chemins
-    std::vector<std::string> path_variants = {
-      "/" + filename,
-      "/sdcard/" + filename,
-      filename
-    };
-    
-    std::string file_path;
-    for (const auto &path : path_variants) {
-      if (this->file_exists_direct(path)) {
-        file_path = path;
-        break;
-      }
-    }
-    
-    if (file_path.empty()) {
-      ESP_LOGW(TAG, "No file found for URL %s", url_path.c_str());
-      request->send(404, "text/plain", "File not found");
-      return;
-    }
-    
-    ESP_LOGD(TAG, "Serving file %s for URL %s", file_path.c_str(), url_path.c_str());
-    
-    // Lire le fichier depuis la SD
-    auto data = this->read_file_direct(file_path);
-    if (data.empty()) {
-      ESP_LOGW(TAG, "Failed to read file %s", file_path.c_str());
-      request->send(404, "text/plain", "File not found or empty");
-      return;
-    }
-    
-    // Déterminer le type MIME
-    std::string content_type = "application/octet-stream";
-    if (file_path.find(".jpg") != std::string::npos || file_path.find(".jpeg") != std::string::npos) {
-      content_type = "image/jpeg";
-    } else if (file_path.find(".png") != std::string::npos) {
-      content_type = "image/png";
-    } else if (file_path.find(".mp3") != std::string::npos) {
-      content_type = "audio/mpeg";
-    } else if (file_path.find(".wav") != std::string::npos) {
-      content_type = "audio/wav";
-    } else if (file_path.find(".gif") != std::string::npos) {
-      content_type = "image/gif";
-    } else if (file_path.find(".bmp") != std::string::npos) {
-      content_type = "image/bmp";
-    }
-    
-    // Envoyer la réponse
-    AsyncResponseStream *response = request->beginResponseStream(content_type.c_str());
-    response->write(data.data(), data.size());
-    request->send(response);
-  });
-  
-  ESP_LOGI(TAG, "HTTP handlers for SD card files registered");
-}
-
-void StorageComponent::register_http_resource(const std::string &path, const std::string &url_path) {
-  this->http_resources_[path] = url_path;
-  ESP_LOGD(TAG, "Registered HTTP resource: %s -> %s", path.c_str(), url_path.c_str());
 }
 
 // ===========================================
