@@ -130,16 +130,23 @@ void StorageComponent::setup_sd_direct() {
     return;
   }
   
-  // Vérifier si la carte SD est montée
-  if (!sd_component_->is_mounted()) {
-    ESP_LOGD(TAG, "SD card not mounted, attempting to mount...");
-    if (!sd_component_->mount()) {
-      ESP_LOGE(TAG, "Failed to mount SD card!");
-      return;
+  // Nous supposons que la carte SD est déjà montée et initialisée par le composant sd_mmc_card
+  ESP_LOGD(TAG, "Using pre-initialized SD card component");
+  
+  // Vérifier si la carte SD est accessible en essayant de lire un fichier
+  bool sd_accessible = false;
+  for (auto *file : files_) {
+    if (sd_component_->file_size(file->get_path()) > 0) {
+      sd_accessible = true;
+      break;
     }
   }
   
-  ESP_LOGD(TAG, "SD card mounted successfully");
+  if (!sd_accessible) {
+    ESP_LOGW(TAG, "SD card might not be accessible - no files found");
+  } else {
+    ESP_LOGD(TAG, "SD card is accessible");
+  }
   
   // Configurer tous les fichiers pour SD direct
   for (auto *file : files_) {
