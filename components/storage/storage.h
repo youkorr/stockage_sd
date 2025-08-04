@@ -107,10 +107,10 @@ class StorageComponent : public Component {
 
   // Nouvelles méthodes pour simulation HTTP
   void set_web_server(web_server_base::WebServerBase *web_server) { web_server_ = web_server; }
-  std::string get_http_url_for_file(const std::string &file_id) const;
   void setup_http_handlers(web_server_base::WebServerBase *web_server);
+  std::string get_http_url_for_file(const std::string &file_id) const;
   void register_http_resource(const std::string &path, const std::string &url_path);
-  std::string get_base_url() const { return "http://localhost"; }
+  std::string get_base_url() const { return "0.0.0.0"; }  // Utiliser 0.0.0.0 au lieu de localhost
 
  private:
   void setup_sd_card();
