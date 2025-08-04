@@ -1,9 +1,11 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <map>
 #include <functional>
 #include "esphome/core/component.h"
 #include "esphome/components/audio/audio.h"
+#include "esphome/components/web_server_base/web_server_base.h"
 #include "driver/sdmmc_host.h"
 #include "driver/sdmmc_defs.h"
 #include "esp_vfs_fat.h"
@@ -49,6 +51,9 @@ class StorageFile : public audio::AudioFile, public Component {
   // Helpers pour info fichier
   size_t get_file_size_direct() const;
   bool file_exists_direct() const;
+
+  // Nouvelle méthode pour obtenir l'URL HTTP simulée
+  std::string get_http_url() const;
 
  private:
   std::string path_;
@@ -100,6 +105,12 @@ class StorageComponent : public Component {
   static void set_global_instance(StorageComponent* instance) { global_instance_ = instance; }
   static StorageComponent* get_global_instance() { return global_instance_; }
 
+  // Nouvelles méthodes pour simulation HTTP
+  void set_web_server(web_server_base::WebServerBase *web_server) { web_server_ = web_server; }
+  void setup_http_handlers();
+  std::string get_http_url_for_file(const std::string &file_id) const;
+  void register_http_resource(const std::string &path, const std::string &url_path);
+
  private:
   void setup_sd_card();
   void setup_flash();
@@ -113,6 +124,10 @@ class StorageComponent : public Component {
   sd_mmc_card::SdMmc *sd_component_{nullptr};
   bool global_bypass_enabled_{false};
   size_t cache_size_{0};
+  
+  // Pour simulation HTTP
+  web_server_base::WebServerBase *web_server_{nullptr};
+  std::map<std::string, std::string> http_resources_;
 };
 
 // Classe pour hooks globaux ESPHome
