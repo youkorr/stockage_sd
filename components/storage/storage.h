@@ -15,12 +15,15 @@ namespace storage {
 // Forward declarations
 class StorageComponent;
 
+// Utiliser l'enum ImageType de ESPHome ou le définir si nécessaire
+using ImageType = image::ImageType;
+
 // Énumérations pour les formats d'image
 enum class ImageFormat {
   rgb565,
   rgb888,
   rgba,
-  graycale,
+  grayscale,  // Fixed: was "graycale"
   binary
 };
 
@@ -106,8 +109,8 @@ class SdImageComponent : public Component, public image::Image {
   
   // Méthodes héritées de image::Image - OBLIGATOIRES
   void draw(int x, int y, display::Display *display, Color color_on, Color color_off) override;
-  const uint8_t *get_data_start() override { return this->image_data_.data(); }
-  image::ImageType get_type() const override;
+  const uint8_t *get_data_start() const override { return this->image_data_.data(); }
+  ImageType get_type() const override;
   
   // Méthodes principales
   bool load_image();
@@ -224,7 +227,6 @@ template<typename... Ts> class SdImageUnloadAction : public Action<Ts...> {
 
 }  // namespace storage
 }  // namespace esphome
-
 
 
 
