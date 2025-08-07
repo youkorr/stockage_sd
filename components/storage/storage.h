@@ -99,6 +99,7 @@ class SdImageComponent : public Component {
   
   // Méthodes d'accès aux pixels
   void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const;
+  void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const; 
   const uint8_t *get_data() const { return image_data_.data(); }
   size_t get_data_size() const { return image_data_.size(); }
   
@@ -113,6 +114,7 @@ class SdImageComponent : public Component {
   
   // Méthodes pour streaming (images très grandes)
   void get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const;
+  void get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const;
   bool is_streaming_mode() const { return streaming_mode_; }
   void set_streaming_mode(bool enabled) { streaming_mode_ = enabled; }
   
