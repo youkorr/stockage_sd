@@ -513,14 +513,16 @@ OPTIONS_SCHEMA = {
     cv.Optional(CONF_TYPE): validate_type(IMAGE_TYPE),
 }
 
-# Correction de la définition de OPTIONS
-OPTIONS = [CONF_RESIZE, CONF_DITHER, CONF_INVERT_ALPHA, CONF_BYTE_ORDER, CONF_TRANSPARENCY, CONF_TYPE]
-
 # image schema with no defaults, used with `CONF_IMAGES` in the config
-IMAGE_SCHEMA_NO_DEFAULTS = {
+IMAGE_SCHEMA_NO_DEFAULTS = cv.Schema({
     **IMAGE_ID_SCHEMA,
-    **{cv.Optional(key): OPTIONS_SCHEMA[cv.Optional(key)] for key in OPTIONS if cv.Optional(key) in OPTIONS_SCHEMA},
-}
+    cv.Optional(CONF_RESIZE): cv.dimensions,
+    cv.Optional(CONF_DITHER): cv.one_of("NONE", "FLOYDSTEINBERG", upper=True),
+    cv.Optional(CONF_INVERT_ALPHA): cv.boolean,
+    cv.Optional(CONF_BYTE_ORDER): cv.one_of("BIG_ENDIAN", "LITTLE_ENDIAN", upper=True),
+    cv.Optional(CONF_TRANSPARENCY): validate_transparency(),
+    cv.Optional(CONF_TYPE): validate_type(IMAGE_TYPE),
+})
 
 BASE_SCHEMA = cv.Schema(
     {
@@ -543,47 +545,46 @@ def validate_defaults(value):
     defaults = value[CONF_DEFAULTS]
     result = []
     for index, image in enumerate(value[CONF_IMAGES]):
-        type_val = image.get(CONF_TYPE, defaults.get(CONF_TYPE))
+        # Convertir l'image en dictionnaire si c'est une chaîne
+        if isinstance(image, str):
+            raise cv.Invalid(
+                f"Image at index {index} should be a dictionary, not a string",
+                path=[CONF_IMAGES, index],
+            )
+        
+        # Créer un nouveau dictionnaire pour éviter de modifier l'original
+        config = dict(image)  # Copie explicite
+        
+        # Appliquer les valeurs par défaut
+        type_val = config.get(CONF_TYPE, defaults.get(CONF_TYPE))
         if type_val is None:
             raise cv.Invalid(
                 "Type is required either in the image config or in the defaults",
                 path=[CONF_IMAGES, index],
             )
-        type_class = IMAGE_TYPE[type_val]
         
-        # A default byte order should be simply ignored if the type does not support it
-        available_options = list(OPTIONS)
-        if (
-            not callable(getattr(type_class, "set_big_endian", None))
-            and CONF_BYTE_ORDER not in image
-        ):
-            available_options.remove(CONF_BYTE_ORDER)
-        
-        # Créer un nouveau dictionnaire au lieu de modifier l'existant
-        config = {}
-        
-        # Copier les clés d'identification d'abord
-        for key_schema in IMAGE_ID_SCHEMA:
-            if key_schema in image:
-                config[key_schema] = image[key_schema]
-        
-        # Copier les options avec les valeurs par défaut
-        for key in available_options:
-            if key in image:
-                config[key] = image[key]
-            elif key in defaults:
-                config[key] = defaults[key]
-            else:
-                # Utiliser les valeurs par défaut définies dans OPTIONS_SCHEMA
-                if key == CONF_DITHER:
-                    config[key] = "NONE"
-                elif key == CONF_INVERT_ALPHA:
-                    config[key] = False
-                elif key == CONF_TRANSPARENCY:
-                    config[key] = CONF_OPAQUE
-        
-        # S'assurer que le type est défini
         config[CONF_TYPE] = type_val
+        
+        # Appliquer les autres valeurs par défaut
+        for key in [CONF_RESIZE, CONF_DITHER, CONF_INVERT_ALPHA, CONF_BYTE_ORDER, CONF_TRANSPARENCY]:
+            if key not in config and key in defaults:
+                config[key] = defaults[key]
+        
+        # Valeurs par défaut hardcodées si pas dans defaults
+        if CONF_DITHER not in config:
+            config[CONF_DITHER] = "NONE"
+        if CONF_INVERT_ALPHA not in config:
+            config[CONF_INVERT_ALPHA] = False
+        if CONF_TRANSPARENCY not in config:
+            config[CONF_TRANSPARENCY] = CONF_OPAQUE
+        
+        # Vérifier la compatibilité du type avec byte_order
+        type_class = IMAGE_TYPE[type_val]
+        if (
+            CONF_BYTE_ORDER in config
+            and not callable(getattr(type_class, "set_big_endian", None))
+        ):
+            del config[CONF_BYTE_ORDER]  # Supprimer si non supporté
         
         validate_settings(config)
         result.append(config)
@@ -630,11 +631,6 @@ def typed_image_schema(image_type):
     )
 
 
-# The config schema can be a (possibly empty) single list of images,
-# or a dictionary of image types each with a list of images
-# or a dictionary with keys `defaults:` and `images:`
-
-
 def _config_schema(config):
     if isinstance(config, list):
         return cv.Schema([IMAGE_SCHEMA])(config)
@@ -647,7 +643,7 @@ def _config_schema(config):
             cv.Schema(
                 {
                     cv.Required(CONF_DEFAULTS): cv.Schema(OPTIONS_SCHEMA),
-                    cv.Required(CONF_IMAGES): cv.ensure_list(cv.Schema(IMAGE_SCHEMA_NO_DEFAULTS)),
+                    cv.Required(CONF_IMAGES): cv.ensure_list(IMAGE_SCHEMA_NO_DEFAULTS),
                 }
             )(config)
         )
