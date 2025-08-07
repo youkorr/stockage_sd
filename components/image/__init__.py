@@ -557,10 +557,17 @@ def validate_defaults(value):
             and CONF_BYTE_ORDER not in image
         ):
             available_options.remove(CONF_BYTE_ORDER)
-        config = {
-            **{key: image.get(key, defaults.get(key)) for key in available_options},
-            **{key.schema: image[key.schema] for key in IMAGE_ID_SCHEMA},
-        }
+        
+        # Créer un nouveau dictionnaire au lieu de modifier l'existant
+        config = {}
+        # Ajouter les options avec les valeurs par défaut
+        for key in available_options:
+            config[key] = image.get(key, defaults.get(key))
+        # Ajouter les clés d'identification
+        for key_schema in IMAGE_ID_SCHEMA:
+            if key_schema.schema in image:
+                config[key_schema.schema] = image[key_schema.schema]
+        
         validate_settings(config)
         result.append(config)
     return result
