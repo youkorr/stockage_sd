@@ -2,6 +2,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_PLATFORM, CONF_WIDTH, CONF_HEIGHT, CONF_FORMAT
 from esphome import automation
+from esphome.components import image
 
 DEPENDENCIES = ['sd_mmc_card', 'image']
 CODEOWNERS = ["@youkorr"]
@@ -27,7 +28,7 @@ storage_ns = cg.esphome_ns.namespace('storage')
 StorageComponent = storage_ns.class_('StorageComponent', cg.Component)
 SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component)
 
-
+SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, image.Image)
 
 SdImageLoadAction = storage_ns.class_('SdImageLoadAction', automation.Action)
 SdImageUnloadAction = storage_ns.class_('SdImageUnloadAction', automation.Action)
