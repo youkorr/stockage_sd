@@ -261,7 +261,8 @@ void SdImageComponent::draw(int x, int y, display::Display *display, Color color
   }
 }
 
-ImageType SdImageComponent::get_type() const {
+// FIXED: Renamed from get_type() to get_image_type() to match header declaration
+ImageType SdImageComponent::get_image_type() const {
   switch (this->format_) {
     case ImageFormat::rgb565:
       return image::IMAGE_TYPE_RGB565;
