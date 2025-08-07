@@ -35,6 +35,7 @@ DEPENDENCIES = ["display"]
 image_ns = cg.esphome_ns.namespace("image")
 
 ImageType = image_ns.enum("ImageType")
+TransparencyType = image_ns.enum("TransparencyType")  # Correction du nom
 
 CONF_OPAQUE = "opaque"
 CONF_CHROMA_KEY = "chroma_key"
@@ -290,8 +291,6 @@ IMAGE_TYPE = {
     "RGB24": ReplaceWith("'type: RGB'"),
     "RGBA": ReplaceWith("'type: RGB' and 'transparency: alpha_channel'"),
 }
-
-TransparencyType = image_ns.enum("TransparencyType")
 
 CONF_TRANSPARENCY = "transparency"
 
@@ -557,10 +556,17 @@ def validate_defaults(value):
             and CONF_BYTE_ORDER not in image
         ):
             available_options.remove(CONF_BYTE_ORDER)
-        config = {
-            **{key: image.get(key, defaults.get(key)) for key in available_options},
-            **{key.schema: image[key.schema] for key in IMAGE_ID_SCHEMA},
-        }
+        
+        # Créer un nouveau dictionnaire au lieu de modifier l'existant
+        config = {}
+        # Copier les options avec les valeurs par défaut
+        for key in available_options:
+            config[key] = image.get(key, defaults.get(key))
+        # Copier les clés d'identification
+        for key in IMAGE_ID_SCHEMA:
+            if key.schema in image:
+                config[key.schema] = image[key.schema]
+        
         validate_settings(config)
         result.append(config)
     return result
@@ -634,10 +640,7 @@ def _config_schema(config):
     )(config)
 
 
-CONFIG_SCHEMA = cv.All(
-    _config_schema,
-    cv.has_at_least_one_key("sd_mmc_card"),  # Ensure sd_mmc_card is available when needed
-)
+CONFIG_SCHEMA = cv.All(_config_schema)
 
 
 async def write_image(config, all_frames=False):
