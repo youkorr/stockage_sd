@@ -281,7 +281,7 @@ void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &g
 void SdImageComponent::convert_pixel_format(int x, int y, const uint8_t *pixel_data,
                                            uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const {
   switch (format_) {
-    case ImageFormat::RGB565: {
+    case ImageFormat::rgb565: {
       uint16_t pixel = (pixel_data[1] << 8) | pixel_data[0];
       red = ((pixel >> 11) & 0x1F) << 3;
       green = ((pixel >> 5) & 0x3F) << 2;
@@ -289,23 +289,23 @@ void SdImageComponent::convert_pixel_format(int x, int y, const uint8_t *pixel_d
       alpha = 255;
       break;
     }
-    case ImageFormat::RGB888:
+    case ImageFormat::rgb888:
       red = pixel_data[0];
       green = pixel_data[1];
       blue = pixel_data[2];
       alpha = 255;
       break;
-    case ImageFormat::RGBA:
+    case ImageFormat::rgba:
       red = pixel_data[0];
       green = pixel_data[1];
       blue = pixel_data[2];
       alpha = pixel_data[3];
       break;
-    case ImageFormat::GRAYSCALE:
+    case ImageFormat::graycale:
       red = green = blue = pixel_data[0];
       alpha = 255;
       break;
-    case ImageFormat::BINARY: {
+    case ImageFormat::binary: {
       int byte_index = (y * width_ + x) / 8;
       int bit_index = (y * width_ + x) % 8;
       bool pixel_on = (pixel_data[byte_index] >> (7 - bit_index)) & 1;
@@ -318,15 +318,15 @@ void SdImageComponent::convert_pixel_format(int x, int y, const uint8_t *pixel_d
 
 size_t SdImageComponent::get_pixel_size() const {
   switch (format_) {
-    case ImageFormat::RGB565:
+    case ImageFormat::rgb565:
       return 2;
-    case ImageFormat::RGB888:
+    case ImageFormat::rgb888:
       return 3;
-    case ImageFormat::RGBA:
+    case ImageFormat::rgba:
       return 4;
-    case ImageFormat::GRAYSCALE:
+    case ImageFormat::graycale:
       return 1;
-    case ImageFormat::BINARY:
+    case ImageFormat::binary:
       return 1; // Géré spécialement
     default:
       return 2;
@@ -372,11 +372,11 @@ size_t SdImageComponent::calculate_expected_size() const {
 
 std::string SdImageComponent::get_format_string() const {
   switch (format_) {
-    case ImageFormat::RGB565: return "RGB565";
-    case ImageFormat::RGB888: return "RGB888";
-    case ImageFormat::RGBA: return "RGBA";
-    case ImageFormat::GRAYSCALE: return "Grayscale";
-    case ImageFormat::BINARY: return "Binary";
+    case ImageFormat::rgb565: return "RGB565";
+    case ImageFormat::rgb888: return "RGB888";
+    case ImageFormat::rgba: return "RGBA";
+    case ImageFormat::graycale: return "Grayscale";
+    case ImageFormat::binary: return "Binary";
     default: return "Unknown";
   }
 }
