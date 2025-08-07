@@ -1,10 +1,9 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_PLATFORM, CONF_WIDTH, CONF_HEIGHT, CONF_FORMAT
-from esphome import automation
 from esphome.components import image
+from esphome import automation
 
-# Dependencies required for this component
 DEPENDENCIES = ['sd_mmc_card', 'image']
 CODEOWNERS = ["@youkorr"]
 
@@ -13,28 +12,26 @@ CONF_STORAGE = "storage"
 CONF_PATH = "path"
 CONF_CHUNK_SIZE = "chunk_size"
 
-# Constants for SD direct
+# Constants pour SD direct
 CONF_SD_COMPONENT = "sd_component"
 CONF_CACHE_SIZE = "cache_size"
 
-# Constants for SD images
+# Constants pour les images SD
 CONF_SD_IMAGES = "sd_images"
+
 CONF_FILE_PATH = "file_path"
 CONF_BYTE_ORDER = "byte_order"
 CONF_CACHE_ENABLED = "cache_enabled"
 CONF_PRELOAD = "preload"
 
-# Namespace for the storage component
 storage_ns = cg.esphome_ns.namespace('storage')
-
-# Classes defined in the storage namespace
 StorageComponent = storage_ns.class_('StorageComponent', cg.Component)
 SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, image.Image)
 
 SdImageLoadAction = storage_ns.class_('SdImageLoadAction', automation.Action)
 SdImageUnloadAction = storage_ns.class_('SdImageUnloadAction', automation.Action)
 
-# Image format mappings (YAML-friendly lowercase keys -> C++ constants)
+# Formats d'image en minuscules (pour YAML) -> valeurs pour C++
 IMAGE_FORMAT = {
     "rgb565": "RGB565",
     "rgb888": "RGB888", 
@@ -43,25 +40,23 @@ IMAGE_FORMAT = {
     "binary": "BINARY",
 }
 
-# Byte order mappings (YAML-friendly lowercase keys -> C++ constants)
+# Ordre des bytes en minuscules (pour YAML) -> valeurs pour C++
 BYTE_ORDER = {
     "little_endian": "LITTLE_ENDIAN",
     "big_endian": "BIG_ENDIAN",
 }
 
-# Schema for SD images
 SD_IMAGE_SCHEMA = cv.Schema({
     cv.Required(CONF_ID): cv.declare_id(SdImageComponent),
     cv.Required(CONF_FILE_PATH): cv.string,
     cv.Required(CONF_WIDTH): cv.positive_int,
     cv.Required(CONF_HEIGHT): cv.positive_int,
-    cv.Required(CONF_FORMAT): cv.enum(IMAGE_FORMAT, lower=True),  # Accept lowercase keys
+    cv.Required(CONF_FORMAT): cv.enum(IMAGE_FORMAT, lower=True),
     cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER, lower=True),
     cv.Optional(CONF_CACHE_ENABLED, default=True): cv.boolean,
     cv.Optional(CONF_PRELOAD, default=False): cv.boolean,
 }).extend(cv.COMPONENT_SCHEMA)
 
-# Main configuration schema
 CONFIG_SCHEMA = cv.Schema({
     cv.Required(CONF_PLATFORM): cv.one_of("sd_direct", lower=True),
     cv.Required(CONF_ID): cv.declare_id(StorageComponent),
@@ -70,74 +65,74 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_SD_IMAGES, default=[]): cv.ensure_list(SD_IMAGE_SCHEMA),
 }).extend(cv.COMPONENT_SCHEMA)
 
-# Validation function for individual image configurations
 def validate_image_config(img_config):
+    """Valide la configuration d'une image"""
     if not img_config[CONF_FILE_PATH].startswith("/"):
         raise cv.Invalid("Image file path must be absolute (start with '/')")
     if img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] > 1024 * 768:
         raise cv.Invalid("Image dimensions too large (max 1024x768)")
     return img_config
 
-# Validation function for the entire storage configuration
 def validate_storage_config(config):
+    """Valide la configuration du storage"""
     if CONF_SD_IMAGES in config:
         for img_config in config[CONF_SD_IMAGES]:
             validate_image_config(img_config)
     return config
 
-# Apply validation rules
+# Application des validations
 CONFIG_SCHEMA = cv.All(CONFIG_SCHEMA, validate_storage_config)
 SD_IMAGE_SCHEMA = cv.All(SD_IMAGE_SCHEMA, validate_image_config)
 
-# Code generation for the storage component
 async def to_code(config):
-    # Create the main storage component
+    """Génère le code pour le composant principal"""
+    # Création du composant principal
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     
-    # Configure the platform
+    # Configuration du composant
     cg.add(var.set_platform(config[CONF_PLATFORM]))
 
-    # Get the SD card component
+    # Récupération du composant SD
     sd_component = await cg.get_variable(config[CONF_SD_COMPONENT])
     cg.add(var.set_sd_component(sd_component))
 
-    # Set cache size if specified
+    # Configuration du cache
     if config[CONF_CACHE_SIZE] > 0:
         cg.add(var.set_cache_size(config[CONF_CACHE_SIZE]))
 
-    # Process SD images
+    # Traitement des images SD
     if CONF_SD_IMAGES in config and config[CONF_SD_IMAGES]:
         for img_config in config[CONF_SD_IMAGES]:
             await process_sd_image_config(img_config, var)
         
         cg.add_define("USE_SD_IMAGE")
 
-# Code generation for individual SD image configurations
 async def process_sd_image_config(img_config, storage_component):
-    # Create the SD image component
+    """Traite la configuration d'une image SD"""
+    # Création du composant image
     img_var = cg.new_Pvariable(img_config[CONF_ID])
     await cg.register_component(img_var, img_config)
 
-    # Basic configuration
+    # Configuration de base
     cg.add(img_var.set_storage_component(storage_component))
     cg.add(img_var.set_file_path(img_config[CONF_FILE_PATH]))
     cg.add(img_var.set_width(img_config[CONF_WIDTH]))
     cg.add(img_var.set_height(img_config[CONF_HEIGHT]))
 
-    # Set image format (convert YAML key to C++ constant)
+    # Configuration du format - conversion minuscule YAML -> majuscule C++
     format_str = IMAGE_FORMAT[img_config[CONF_FORMAT]]
     cg.add(img_var.set_format_string(format_str))
 
-    # Set byte order (convert YAML key to C++ constant)
+    # Configuration de l'ordre des bytes - conversion minuscule YAML -> majuscule C++
     byte_order_str = BYTE_ORDER[img_config[CONF_BYTE_ORDER]]
     cg.add(img_var.set_byte_order_string(byte_order_str))
 
-    # Set optional flags
+    # Configuration des options
     cg.add(img_var.set_cache_enabled(img_config[CONF_CACHE_ENABLED]))
     cg.add(img_var.set_preload(img_config[CONF_PRELOAD]))
 
-    # Calculate expected data size based on format
+    # Calcul de la taille des données (utilisation des clés minuscules)
     format_sizes = {
         "rgb565": 2,
         "rgb888": 3,
@@ -146,7 +141,7 @@ async def process_sd_image_config(img_config, storage_component):
         "binary": 1,
     }
 
-    format_key = img_config[CONF_FORMAT]  # Already lowercase
+    format_key = img_config[CONF_FORMAT]  # Déjà en minuscules
     if format_key == "binary":
         data_size = (img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] + 7) // 8
     else:
@@ -154,7 +149,32 @@ async def process_sd_image_config(img_config, storage_component):
 
     cg.add(img_var.set_expected_data_size(data_size))
 
-# Automation action: Load an SD image
+# Configuration pour les images SD autonomes (sans storage parent)
+STANDALONE_SD_IMAGE_SCHEMA = cv.Schema({
+    cv.Required(CONF_ID): cv.declare_id(SdImageComponent),
+    cv.Required(CONF_FILE_PATH): cv.string,
+    cv.Required(CONF_WIDTH): cv.positive_int,
+    cv.Required(CONF_HEIGHT): cv.positive_int,
+    cv.Required(CONF_FORMAT): cv.enum(IMAGE_FORMAT, lower=True),
+    cv.Required("storage_id"): cv.use_id(StorageComponent),
+    cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER, lower=True),
+    cv.Optional(CONF_CACHE_ENABLED, default=True): cv.boolean,
+    cv.Optional(CONF_PRELOAD, default=False): cv.boolean,
+}).extend(cv.COMPONENT_SCHEMA)
+
+STANDALONE_SD_IMAGE_SCHEMA = cv.All(STANDALONE_SD_IMAGE_SCHEMA, validate_image_config)
+
+async def standalone_sd_image_to_code(config):
+    """Génère le code pour une image SD autonome"""
+    # Récupération du composant storage
+    storage_component = await cg.get_variable(config["storage_id"])
+    
+    # Traitement de l'image
+    await process_sd_image_config(config, storage_component)
+
+# Enregistrement du composant sd_image autonome
+cg.add_define("USE_SD_IMAGE")
+
 @automation.register_action(
     "sd_image.load",
     SdImageLoadAction,
@@ -164,6 +184,7 @@ async def process_sd_image_config(img_config, storage_component):
     })
 )
 async def sd_image_load_to_code(config, action_id, template_arg, args):
+    """Action pour charger une image SD"""
     var = cg.new_Pvariable(action_id, template_arg)
     if "file_path" in config:
         template_ = await cg.templatable(config["file_path"], args, cg.std_string)
@@ -172,7 +193,6 @@ async def sd_image_load_to_code(config, action_id, template_arg, args):
     cg.add(var.set_parent(parent))
     return var
 
-# Automation action: Unload an SD image
 @automation.register_action(
     "sd_image.unload",
     SdImageUnloadAction,
@@ -181,10 +201,22 @@ async def sd_image_load_to_code(config, action_id, template_arg, args):
     })
 )
 async def sd_image_unload_to_code(config, action_id, template_arg, args):
+    """Action pour décharger une image SD"""
     var = cg.new_Pvariable(action_id, template_arg)
     parent = await cg.get_variable(config[CONF_ID])
     cg.add(var.set_parent(parent))
     return var
+
+# Export des schémas pour utilisation externe
+__all__ = [
+    "CONFIG_SCHEMA",
+    "SD_IMAGE_SCHEMA", 
+    "STANDALONE_SD_IMAGE_SCHEMA",
+    "to_code",
+    "standalone_sd_image_to_code",
+    "StorageComponent",
+    "SdImageComponent"
+]
 
 
 
