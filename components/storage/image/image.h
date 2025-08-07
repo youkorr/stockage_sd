@@ -1,6 +1,7 @@
 #pragma once
 #include "esphome/core/color.h"
 #include "esphome/components/display/display.h"
+#include "../sd_mmc_card/sd_mmc_card.h"
 
 #ifdef USE_LVGL
 #include "esphome/components/lvgl/lvgl_proxy.h"
