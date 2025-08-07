@@ -98,7 +98,7 @@ class SdImageComponent : public Component {
   bool reload_image();
   
   // Méthodes d'accès aux pixels
-  void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha = nullptr) const;
+  void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const;
   const uint8_t *get_data() const { return image_data_.data(); }
   size_t get_data_size() const { return image_data_.size(); }
   
