@@ -6,7 +6,7 @@
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/optional.h"
-#include "esphome/components/image/image.h"  // Ajout important
+//#include "esphome/components/image/image.h"  // Ajout important
 #include "../sd_mmc_card/sd_mmc_card.h"
 #include "../image.h/image.h"
 
