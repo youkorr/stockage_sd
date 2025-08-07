@@ -28,7 +28,7 @@ storage_ns = cg.esphome_ns.namespace('storage')
 StorageComponent = storage_ns.class_('StorageComponent', cg.Component)
 #SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component)
 
-SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, image.Image)
+SdImageComponent = storage_ns.class_('SdImageComponent', parents=(cg.Component, image.Image))
 
 SdImageLoadAction = storage_ns.class_('SdImageLoadAction', automation.Action)
 SdImageUnloadAction = storage_ns.class_('SdImageUnloadAction', automation.Action)
