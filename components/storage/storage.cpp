@@ -334,7 +334,7 @@ size_t SdImageComponent::get_pixel_size() const {
 }
 
 size_t SdImageComponent::get_pixel_offset(int x, int y) const {
-  if (format_ == ImageFormat::BINARY) {
+  if (format_ == ImageFormat::binary) {
     return (y * width_ + x) / 8;
   }
   return (y * width_ + x) * get_pixel_size();
@@ -364,7 +364,7 @@ bool SdImageComponent::validate_file_path() const {
 }
 
 size_t SdImageComponent::calculate_expected_size() const {
-  if (format_ == ImageFormat::BINARY) {
+  if (format_ == ImageFormat::binary) {
     return (width_ * height_ + 7) / 8;
   }
   return width_ * height_ * get_pixel_size();
