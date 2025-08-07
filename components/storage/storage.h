@@ -2,8 +2,11 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <functional>
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
+#include "esphome/core/optional.h"
+#include "esphome/components/image/image.h"  // Ajout important
 #include "../sd_mmc_card/sd_mmc_card.h"
 
 namespace esphome {
@@ -37,9 +40,9 @@ class StorageComponent : public Component {
   float get_setup_priority() const override { return setup_priority::DATA; }
   
   // Configuration
-  void set_platform(const std::string &platform) { platform_ = platform; }
-  void set_sd_component(sd_mmc_card::SdMmc *sd_component) { sd_component_ = sd_component; }
-  void set_cache_size(size_t cache_size) { cache_size_ = cache_size; }
+  void set_platform(const std::string &platform) { this->platform_ = platform; }
+  void set_sd_component(sd_mmc_card::SdMmc *sd_component) { this->sd_component_ = sd_component; }
+  void set_cache_size(size_t cache_size) { this->cache_size_ = cache_size; }
   
   // Méthodes de fichier
   bool file_exists_direct(const std::string &path);
@@ -48,8 +51,9 @@ class StorageComponent : public Component {
   size_t get_file_size(const std::string &path);
   
   // Getters
-  const std::string &get_platform() const { return platform_; }
-  sd_mmc_card::SdMmc *get_sd_component() const { return sd_component_; }
+  const std::string &get_platform() const { return this->platform_; }
+  sd_mmc_card::SdMmc *get_sd_component() const { return this->sd_component_; }
+  size_t get_cache_size() const { return this->cache_size_; }
   
  private:
   std::string platform_;
@@ -57,8 +61,8 @@ class StorageComponent : public Component {
   size_t cache_size_{0};
 };
 
-// Classe pour les images SD
-class SdImageComponent : public Component {
+// Classe pour les images SD - HÉRITE MAINTENANT DE image::Image
+class SdImageComponent : public Component, public image::Image {
  public:
   SdImageComponent() = default;
   
@@ -68,28 +72,42 @@ class SdImageComponent : public Component {
   float get_setup_priority() const override { return setup_priority::DATA; }
   
   // Configuration de base
-  void set_file_path(const std::string &path) { file_path_ = path; }
-  void set_width(int width) { width_ = width; }
-  void set_height(int height) { height_ = height; }
-  void set_format(ImageFormat format) { format_ = format; }
+  void set_file_path(const std::string &path) { this->file_path_ = path; }
+  void set_width(int width) { 
+    this->width_ = width; 
+    // Mettre à jour aussi la classe parent Image
+    this->width_override_ = width;
+  }
+  void set_height(int height) { 
+    this->height_ = height; 
+    // Mettre à jour aussi la classe parent Image
+    this->height_override_ = height;
+  }
+  void set_format(ImageFormat format) { this->format_ = format; }
   void set_format_string(const std::string &format);
-  void set_byte_order(ByteOrder byte_order) { byte_order_ = byte_order; }
+  void set_byte_order(ByteOrder byte_order) { this->byte_order_ = byte_order; }
   void set_byte_order_string(const std::string &byte_order);
-  void set_expected_data_size(size_t size) { expected_data_size_ = size; }
+  void set_expected_data_size(size_t size) { this->expected_data_size_ = size; }
   
   // Configuration avancée
-  void set_cache_enabled(bool enabled) { cache_enabled_ = enabled; }
-  void set_preload(bool preload) { preload_ = preload; }
-  void set_storage_component(StorageComponent *storage) { storage_component_ = storage; }
+  void set_cache_enabled(bool enabled) { this->cache_enabled_ = enabled; }
+  void set_preload(bool preload) { this->preload_ = preload; }
+  void set_storage_component(StorageComponent *storage) { this->storage_component_ = storage; }
   
   // Getters
-  const std::string &get_file_path() const { return file_path_; }
-  int get_width() const { return width_; }
-  int get_height() const { return height_; }
-  ImageFormat get_format() const { return format_; }
-  ByteOrder get_byte_order() const { return byte_order_; }
-  bool is_loaded() const { return is_loaded_; }
-  bool is_cache_enabled() const { return cache_enabled_; }
+  const std::string &get_file_path() const { return this->file_path_; }
+  int get_width() const override { return this->width_; }  // Override de Image
+  int get_height() const override { return this->height_; } // Override de Image
+  ImageFormat get_format() const { return this->format_; }
+  ByteOrder get_byte_order() const { return this->byte_order_; }
+  bool is_loaded() const { return this->is_loaded_; }
+  bool is_cache_enabled() const { return this->cache_enabled_; }
+  size_t get_expected_data_size() const { return this->expected_data_size_; }
+  
+  // Méthodes héritées de image::Image - OBLIGATOIRES
+  void draw(int x, int y, display::Display *display, Color color_on, Color color_off) override;
+  const uint8_t *get_data_start() override { return this->image_data_.data(); }
+  image::ImageType get_type() const override;
   
   // Méthodes principales
   bool load_image();
@@ -100,8 +118,8 @@ class SdImageComponent : public Component {
   // Méthodes d'accès aux pixels
   void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const;
   void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const; 
-  const uint8_t *get_data() const { return image_data_.data(); }
-  size_t get_data_size() const { return image_data_.size(); }
+  const uint8_t *get_data() const { return this->image_data_.data(); }
+  size_t get_data_size() const { return this->image_data_.size(); }
   
   // Méthodes utilitaires
   bool validate_image_data() const;
@@ -110,21 +128,21 @@ class SdImageComponent : public Component {
   
   // Gestion mémoire
   void free_cache();
-  size_t get_memory_usage() const { return image_data_.size(); }
+  size_t get_memory_usage() const { return this->image_data_.size(); }
   
   // Méthodes pour streaming (images très grandes)
   void get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const;
   void get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const;
-  bool is_streaming_mode() const { return streaming_mode_; }
-  void set_streaming_mode(bool enabled) { streaming_mode_ = enabled; }
+  bool is_streaming_mode() const { return this->streaming_mode_; }
+  void set_streaming_mode(bool enabled) { this->streaming_mode_ = enabled; }
   
   // Méthodes de compatibilité pour les displays
-  void get_image_dimensions(int *width, int *height) {
-    *width = width_;
-    *height = height_;
+  void get_image_dimensions(int *width, int *height) const {
+    if (width) *width = this->width_;
+    if (height) *height = this->height_;
   }
   
-  const uint8_t* get_image_data() const { return get_data(); }
+  const uint8_t* get_image_data() const { return this->get_data(); }
 
  private:
   // Configuration
@@ -143,6 +161,10 @@ class SdImageComponent : public Component {
   std::vector<uint8_t> image_data_;
   StorageComponent *storage_component_{nullptr};
   
+  // Variables pour la compatibilité avec Image
+  int width_override_{0};
+  int height_override_{0};
+  
   // Méthodes privées
   bool read_image_from_storage();
   void convert_byte_order(std::vector<uint8_t> &data);
@@ -159,42 +181,49 @@ class SdImageComponent : public Component {
 // Classes pour les actions d'automatisation
 template<typename... Ts> class SdImageLoadAction : public Action<Ts...> {
  public:
+  SdImageLoadAction() = default;
   explicit SdImageLoadAction(SdImageComponent *parent) : parent_(parent) {}
   
-  void set_file_path(std::function<std::string(Ts...)> file_path) { file_path_ = file_path; }
-  void set_parent(SdImageComponent *parent) { parent_ = parent; }
+  TEMPLATABLE_VALUE(std::string, file_path)
+  
+  void set_parent(SdImageComponent *parent) { this->parent_ = parent; }
   
   void play(Ts... x) override {
-    std::string path = file_path_.has_value() ? file_path_.value()(x...) : "";
-    if (path.empty()) {
-      parent_->load_image();
-    } else {
-      parent_->load_image_from_path(path);
+    if (this->parent_ == nullptr) return;
+    
+    if (this->file_path_.has_value()) {
+      std::string path = this->file_path_.value(x...);
+      if (!path.empty()) {
+        this->parent_->load_image_from_path(path);
+        return;
+      }
     }
+    this->parent_->load_image();
   }
 
  private:
-  SdImageComponent *parent_;
-  optional<std::function<std::string(Ts...)>> file_path_;
+  SdImageComponent *parent_{nullptr};
 };
 
 template<typename... Ts> class SdImageUnloadAction : public Action<Ts...> {
  public:
+  SdImageUnloadAction() = default;
   explicit SdImageUnloadAction(SdImageComponent *parent) : parent_(parent) {}
   
-  void set_parent(SdImageComponent *parent) { parent_ = parent; }
+  void set_parent(SdImageComponent *parent) { this->parent_ = parent; }
   
   void play(Ts... x) override {
-    parent_->unload_image();
+    if (this->parent_ != nullptr) {
+      this->parent_->unload_image();
+    }
   }
 
  private:
-  SdImageComponent *parent_;
+  SdImageComponent *parent_{nullptr};
 };
 
 }  // namespace storage
 }  // namespace esphome
-
 
 
 
