@@ -142,7 +142,7 @@ void SdImageComponent::set_format_string(const std::string &format) {
   if (format == "RGB565") this->format_ = ImageFormat::rgb565;
   else if (format == "RGB888") this->format_ = ImageFormat::rgb888;
   else if (format == "RGBA") this->format_ = ImageFormat::rgba;
-  else if (format == "GRAYSCALE") this->format_ = ImageFormat::graycale;
+  else if (format == "GRAYSCALE") this->format_ = ImageFormat::grayscale;  // Fixed spelling
   else if (format == "BINARY") this->format_ = ImageFormat::binary;
   else {
     ESP_LOGW(TAG_IMAGE, "Unknown format: %s, using RGB565", format.c_str());
@@ -261,15 +261,15 @@ void SdImageComponent::draw(int x, int y, display::Display *display, Color color
   }
 }
 
-image::ImageType SdImageComponent::get_type() const {
+ImageType SdImageComponent::get_type() const {
   switch (this->format_) {
     case ImageFormat::rgb565:
       return image::IMAGE_TYPE_RGB565;
     case ImageFormat::rgb888:
-      return image::IMAGE_TYPE_RGB24;
+      return image::IMAGE_TYPE_RGB;  // ESPHome utilise RGB pour RGB24
     case ImageFormat::rgba:
-      return image::IMAGE_TYPE_RGBA;
-    case ImageFormat::graycale:
+      return image::IMAGE_TYPE_RGB;  // Fallback vers RGB
+    case ImageFormat::grayscale:
       return image::IMAGE_TYPE_GRAYSCALE;
     case ImageFormat::binary:
       return image::IMAGE_TYPE_BINARY;
@@ -365,7 +365,7 @@ void SdImageComponent::convert_pixel_format(int x, int y, const uint8_t *pixel_d
       blue = pixel_data[2];
       alpha = pixel_data[3];
       break;
-    case ImageFormat::graycale:
+    case ImageFormat::grayscale:  // Fixed spelling
       red = green = blue = pixel_data[0];
       alpha = 255;
       break;
@@ -388,7 +388,7 @@ size_t SdImageComponent::get_pixel_size() const {
       return 3;
     case ImageFormat::rgba:
       return 4;
-    case ImageFormat::graycale:
+    case ImageFormat::grayscale:  // Fixed spelling
       return 1;
     case ImageFormat::binary:
       return 1; // Géré spécialement
@@ -439,7 +439,7 @@ std::string SdImageComponent::get_format_string() const {
     case ImageFormat::rgb565: return "RGB565";
     case ImageFormat::rgb888: return "RGB888";
     case ImageFormat::rgba: return "RGBA";
-    case ImageFormat::graycale: return "Grayscale";
+    case ImageFormat::grayscale: return "Grayscale";  // Fixed spelling
     case ImageFormat::binary: return "Binary";
     default: return "Unknown";
   }
