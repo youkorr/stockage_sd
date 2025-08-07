@@ -300,7 +300,7 @@ IMAGE_DOWNLOAD_TIMEOUT = 30  # seconds
 
 SOURCE_LOCAL = "local"
 SOURCE_WEB = "web"
-
+SOURCE_SD_CARD = "sd_card"
 SOURCE_MDI = "mdi"
 SOURCE_MDIL = "mdil"
 SOURCE_MEMORY = "memory"
@@ -419,15 +419,23 @@ WEB_SCHEMA = cv.All(
 )
 
 
+
+SD_CARD_SCHEMA = cv.All(
+    {
+        cv.Required(CONF_PATH): cv.string,
+    },
+    lambda value: value[CONF_PATH],
+)
+
 TYPED_FILE_SCHEMA = cv.typed_schema(
     {
         SOURCE_LOCAL: LOCAL_SCHEMA,
         SOURCE_WEB: WEB_SCHEMA,
+        SOURCE_SD_CARD: SD_CARD_SCHEMA,
     }
     | {source: mdi_schema(source) for source in MDI_SOURCES},
     key=CONF_SOURCE,
 )
-
 
 def validate_transparency(choices=TRANSPARENCY_TYPES):
     def validate(value):
@@ -626,6 +634,11 @@ CONFIG_SCHEMA = _config_schema
 
 
 async def write_image(config, all_frames=False):
+    # Cas spécial : source = sd_card → image lue à l'exécution, pas à la compilation
+    if config.get(CONF_SOURCE) == "sd_card":
+        _LOGGER.info(f"Skipping compile-time processing for SD card image: {config[CONF_FILE]}")
+        return None, None, None, None, None, None
+
     path = Path(config[CONF_FILE])
     if not path.is_file():
         raise core.EsphomeError(f"Could not load image file {path}")
@@ -682,8 +695,8 @@ async def write_image(config, all_frames=False):
     total_rows = height * frame_count
     encoder = IMAGE_TYPE[type](width, total_rows, transparency, dither, invert_alpha)
     if byte_order := config.get(CONF_BYTE_ORDER):
-        # Check for valid type has already been done in validate_settings
         encoder.set_big_endian(byte_order == "BIG_ENDIAN")
+
     for frame_index in range(frame_count):
         image.seek(frame_index)
         pixels = encoder.convert(image.resize((width, height)), path).getdata()
@@ -698,6 +711,7 @@ async def write_image(config, all_frames=False):
     trans_value = get_transparency_enum(encoder.transparency)
 
     return prog_arr, width, height, image_type, trans_value, frame_count
+
 
 
 async def to_code(config):
