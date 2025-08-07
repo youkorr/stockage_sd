@@ -109,8 +109,14 @@ class SdImageComponent : public Component, public image::Image {
   
   // Méthodes héritées de image::Image - OBLIGATOIRES
   void draw(int x, int y, display::Display *display, Color color_on, Color color_off) override;
-  const uint8_t *get_data_start() const override { return this->image_data_.data(); }
-  ImageType get_type() const override;
+  
+  // REMOVED: These methods don't exist in the base Image class or have different signatures
+  // const uint8_t *get_data_start() const override { return this->image_data_.data(); }
+  // ImageType get_type() const override;
+  
+  // Alternative methods for accessing image data
+  const uint8_t *get_data_start() const { return this->image_data_.data(); }
+  ImageType get_image_type() const;  // Renamed to avoid override conflict
   
   // Méthodes principales
   bool load_image();
