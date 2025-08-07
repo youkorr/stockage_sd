@@ -65,9 +65,10 @@ class StorageComponent : public Component {
 };
 
 // Classe pour les images SD - HÉRITE MAINTENANT DE image::Image
-class SdImageComponent : public Component, public image::Image {
+class SdImageComponent : public Component, public display::BaseImage {
  public:
   SdImageComponent() = default;
+
   
   void setup() override;
   void loop() override {}
