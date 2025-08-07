@@ -494,24 +494,25 @@ def validate_settings(value):
     return value
 
 
-# Schéma simplifié - uniquement liste d'images
-CONFIG_SCHEMA = cv.ensure_list(
-    cv.Schema(
-        {
-            cv.Required(CONF_ID): cv.declare_id(Image_),
-            cv.Required(CONF_FILE): cv.Any(validate_file_shorthand, TYPED_FILE_SCHEMA),
-            cv.GenerateID(CONF_RAW_DATA_ID): cv.declare_id(cg.uint8),
-            cv.Optional(CONF_RESIZE): cv.dimensions,
-            cv.Optional(CONF_DITHER, default="NONE"): cv.one_of(
-                "NONE", "FLOYDSTEINBERG", upper=True
-            ),
-            cv.Optional(CONF_INVERT_ALPHA, default=False): cv.boolean,
-            cv.Optional(CONF_BYTE_ORDER): cv.one_of("BIG_ENDIAN", "LITTLE_ENDIAN", upper=True),
-            cv.Optional(CONF_TRANSPARENCY, default=CONF_OPAQUE): validate_transparency(),
-            cv.Required(CONF_TYPE): validate_type(IMAGE_TYPE),
-        }
-    ).add_extra(validate_settings)
-)
+# Schéma de base pour une image individuelle
+IMAGE_SCHEMA = cv.Schema(
+    {
+        cv.Required(CONF_ID): cv.declare_id(Image_),
+        cv.Required(CONF_FILE): cv.Any(validate_file_shorthand, TYPED_FILE_SCHEMA),
+        cv.GenerateID(CONF_RAW_DATA_ID): cv.declare_id(cg.uint8),
+        cv.Optional(CONF_RESIZE): cv.dimensions,
+        cv.Optional(CONF_DITHER, default="NONE"): cv.one_of(
+            "NONE", "FLOYDSTEINBERG", upper=True
+        ),
+        cv.Optional(CONF_INVERT_ALPHA, default=False): cv.boolean,
+        cv.Optional(CONF_BYTE_ORDER): cv.one_of("BIG_ENDIAN", "LITTLE_ENDIAN", upper=True),
+        cv.Optional(CONF_TRANSPARENCY, default=CONF_OPAQUE): validate_transparency(),
+        cv.Required(CONF_TYPE): validate_type(IMAGE_TYPE),
+    }
+).add_extra(validate_settings)
+
+# Schéma de configuration principal - uniquement liste d'images
+CONFIG_SCHEMA = cv.ensure_list(IMAGE_SCHEMA)
 
 
 async def write_image(config, all_frames=False):
