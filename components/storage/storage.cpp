@@ -406,34 +406,6 @@ std::string SdImageComponent::get_format_string() const {
   }
 }
 
-bool SdImageComponent::validate_image_header(const std::vector<uint8_t> &data) {
-  if (data.size() < 8) {
-    ESP_LOGE(TAG_IMAGE, "Image data too small to validate header");
-    return false;
-  }
-  // Exemple simple pour PNG (signature PNG : 89 50 4E 47 0D 0A 1A 0A)
-  const uint8_t png_signature[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
-  if (memcmp(data.data(), png_signature, 8) == 0) {
-    ESP_LOGD(TAG_IMAGE, "Valid PNG header detected");
-    return true;
-  }
-  // Ajoutez d'autres validations pour d'autres formats (JPEG, BMP, etc.)
-  ESP_LOGW(TAG_IMAGE, "Unsupported or invalid image format");
-  return false;
-}
-
-bool SdImageComponent::extract_image_dimensions(const std::vector<uint8_t> &data, int &width, int &height) {
-  if (data.size() < 24) {
-    ESP_LOGE(TAG_IMAGE, "Image data too small to extract dimensions");
-    return false;
-  }
-  // Exemple pour PNG (largeur et hauteur sont stockées dans les octets 16-23)
-  width = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19];
-  height = (data[20] << 24) | (data[21] << 16) | (data[22] << 8) | data[23];
-  ESP_LOGD(TAG_IMAGE, "Extracted dimensions: %dx%d", width, height);
-  return true;
-}
-
 bool SdImageComponent::validate_image_data() const {
   if (!this->is_loaded_) return false;
   size_t expected_size = this->calculate_expected_size();
@@ -451,9 +423,35 @@ void SdImageComponent::free_cache() {
   }
 }
 
+bool SdImageComponent::validate_image_header(const std::vector<uint8_t> &data) {
+  if (data.size() < 8) {
+    ESP_LOGE(TAG_IMAGE, "Image data too small to validate header");
+    return false;
+  }
+  // Exemple simple pour PNG (signature PNG : 89 50 4E 47 0D 0A 1A 0A)
+  const uint8_t png_signature[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+  if (memcmp(data.data(), png_signature, 8) == 0) {
+    ESP_LOGD(TAG_IMAGE, "Valid PNG header detected");
+    return true;
+  }
+  ESP_LOGW(TAG_IMAGE, "Unsupported or invalid image format");
+  return false;
+}
+
+bool SdImageComponent::extract_image_dimensions(const std::vector<uint8_t> &data, int &width, int &height) {
+  if (data.size() < 24) {
+    ESP_LOGE(TAG_IMAGE, "Image data too small to extract dimensions");
+    return false;
+  }
+  // Exemple pour PNG (largeur et hauteur sont stockées dans les octets 16-23)
+  width = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19];
+  height = (data[20] << 24) | (data[21] << 16) | (data[22] << 8) | data[23];
+  ESP_LOGD(TAG_IMAGE, "Extracted dimensions: %dx%d", width, height);
+  return true;
+}
+
 }  // namespace storage
 }  // namespace esphome
-
 
 
 
