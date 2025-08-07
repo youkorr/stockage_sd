@@ -634,10 +634,7 @@ def _config_schema(config):
     )(config)
 
 
-CONFIG_SCHEMA = cv.All(
-    _config_schema,
-    cv.has_at_least_one_key("sd_mmc_card"),  # Ensure sd_mmc_card is available when needed
-)
+CONFIG_SCHEMA = _config_schema
 
 
 async def write_image(config, all_frames=False):
