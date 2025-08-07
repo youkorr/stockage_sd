@@ -22,8 +22,8 @@ enum class ImageFormat {
 };
 
 enum class ByteOrder {
-  LITTLE_ENDIAN,
-  BIG_ENDIAN
+  little_endian,
+  big_endian
 };
 
 // Classe principale Storage
