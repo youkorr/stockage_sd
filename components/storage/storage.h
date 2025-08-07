@@ -12,7 +12,7 @@
 
 // Inclusions pour les décodeurs d'images
 #ifdef USE_ESP32
-#include "esp_jpg_decode.h"  // ESP32 JPEG decoder natif
+
 #endif
 
 // Optionnel: Support PNG avec LodePNG (plus lourd)
