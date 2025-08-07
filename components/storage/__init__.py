@@ -56,6 +56,8 @@ SD_IMAGE_SCHEMA = cv.Schema({
     cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER, lower=True),
     cv.Optional(CONF_CACHE_ENABLED, default=True): cv.boolean,
     cv.Optional(CONF_PRELOAD, default=False): cv.boolean,
+    # Ajouter le type pour la compatibilité LVGL
+    cv.Optional("type"): cv.enum(IMAGE_FORMAT, upper=True),
 }).extend(cv.COMPONENT_SCHEMA)  # Enlever .extend(image.IMAGE_SCHEMA)
 
 CONFIG_SCHEMA = cv.Schema({
@@ -71,6 +73,11 @@ def validate_image_config(img_config):
         raise cv.Invalid("Image file path must be absolute (start with '/')")
     if img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] > 1024 * 768:
         raise cv.Invalid("Image dimensions too large (max 1024x768)")
+    
+    # Auto-définir le type basé sur le format si pas défini
+    if "type" not in img_config:
+        img_config["type"] = IMAGE_FORMAT[img_config[CONF_FORMAT]]
+    
     return img_config
 
 def validate_storage_config(config):
