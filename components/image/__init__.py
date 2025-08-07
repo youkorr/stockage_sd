@@ -13,7 +13,6 @@ import esphome.codegen as cg
 from esphome.components.const import CONF_BYTE_ORDER
 import esphome.config_validation as cv
 from esphome.const import (
-    CONF_DEFAULTS,
     CONF_DITHER,
     CONF_FILE,
     CONF_ICON,
@@ -40,7 +39,6 @@ CONF_OPAQUE = "opaque"
 CONF_CHROMA_KEY = "chroma_key"
 CONF_ALPHA_CHANNEL = "alpha_channel"
 CONF_INVERT_ALPHA = "invert_alpha"
-CONF_IMAGES = "images"
 
 TRANSPARENCY_TYPES = (
     CONF_OPAQUE,
@@ -496,122 +494,24 @@ def validate_settings(value):
     return value
 
 
-IMAGE_ID_SCHEMA = {
-    cv.Required(CONF_ID): cv.declare_id(Image_),
-    cv.Required(CONF_FILE): cv.Any(validate_file_shorthand, TYPED_FILE_SCHEMA),
-    cv.GenerateID(CONF_RAW_DATA_ID): cv.declare_id(cg.uint8),
-}
-
-
-OPTIONS_SCHEMA = {
-    cv.Optional(CONF_RESIZE): cv.dimensions,
-    cv.Optional(CONF_DITHER, default="NONE"): cv.one_of(
-        "NONE", "FLOYDSTEINBERG", upper=True
-    ),
-    cv.Optional(CONF_INVERT_ALPHA, default=False): cv.boolean,
-    cv.Optional(CONF_BYTE_ORDER): cv.one_of("BIG_ENDIAN", "LITTLE_ENDIAN", upper=True),
-    cv.Optional(CONF_TRANSPARENCY, default=CONF_OPAQUE): validate_transparency(),
-    cv.Optional(CONF_TYPE): validate_type(IMAGE_TYPE),
-}
-
-OPTIONS = [key.schema for key in OPTIONS_SCHEMA]
-
-# image schema with no defaults, used with `CONF_IMAGES` in the config
-IMAGE_SCHEMA_NO_DEFAULTS = {
-    **IMAGE_ID_SCHEMA,
-    **{cv.Optional(key): OPTIONS_SCHEMA[key] for key in OPTIONS},
-}
-
-BASE_SCHEMA = cv.Schema(
-    {
-        **IMAGE_ID_SCHEMA,
-        **OPTIONS_SCHEMA,
-    }
-).add_extra(validate_settings)
-
-IMAGE_SCHEMA = BASE_SCHEMA.extend(
-    {
-        cv.Required(CONF_TYPE): validate_type(IMAGE_TYPE),
-    }
+# Schéma simplifié - uniquement liste d'images
+CONFIG_SCHEMA = cv.ensure_list(
+    cv.Schema(
+        {
+            cv.Required(CONF_ID): cv.declare_id(Image_),
+            cv.Required(CONF_FILE): cv.Any(validate_file_shorthand, TYPED_FILE_SCHEMA),
+            cv.GenerateID(CONF_RAW_DATA_ID): cv.declare_id(cg.uint8),
+            cv.Optional(CONF_RESIZE): cv.dimensions,
+            cv.Optional(CONF_DITHER, default="NONE"): cv.one_of(
+                "NONE", "FLOYDSTEINBERG", upper=True
+            ),
+            cv.Optional(CONF_INVERT_ALPHA, default=False): cv.boolean,
+            cv.Optional(CONF_BYTE_ORDER): cv.one_of("BIG_ENDIAN", "LITTLE_ENDIAN", upper=True),
+            cv.Optional(CONF_TRANSPARENCY, default=CONF_OPAQUE): validate_transparency(),
+            cv.Required(CONF_TYPE): validate_type(IMAGE_TYPE),
+        }
+    ).add_extra(validate_settings)
 )
-
-
-def validate_defaults(value):
-    """
-    Validate the options for images with defaults - Version simplifiée
-    """
-    # Simplement retourner la valeur sans modification pour éviter les problèmes EStr
-    return value
-
-
-def typed_image_schema(image_type):
-    """
-    Construct a schema for a specific image type, allowing transparency options
-    """
-    return cv.Any(
-        cv.Schema(
-            {
-                cv.Optional(t.lower()): cv.ensure_list(
-                    BASE_SCHEMA.extend(
-                        {
-                            cv.Optional(
-                                CONF_TRANSPARENCY, default=t
-                            ): validate_transparency((t,)),
-                            cv.Optional(CONF_TYPE, default=image_type): validate_type(
-                                (image_type,)
-                            ),
-                        }
-                    )
-                )
-                for t in IMAGE_TYPE[image_type].allow_config.intersection(
-                    TRANSPARENCY_TYPES
-                )
-            }
-        ),
-        # Allow a default configuration with no transparency preselected
-        cv.ensure_list(
-            BASE_SCHEMA.extend(
-                {
-                    cv.Optional(
-                        CONF_TRANSPARENCY, default=CONF_OPAQUE
-                    ): validate_transparency(),
-                    cv.Optional(CONF_TYPE, default=image_type): validate_type(
-                        (image_type,)
-                    ),
-                }
-            )
-        ),
-    )
-
-
-# The config schema can be a (possibly empty) single list of images,
-# or a dictionary of image types each with a list of images
-# or a dictionary with keys `defaults:` and `images:`
-
-
-def _config_schema(config):
-    if isinstance(config, list):
-        return cv.Schema([IMAGE_SCHEMA])(config)
-    if not isinstance(config, dict):
-        raise cv.Invalid(
-            "Badly formed image configuration, expected a list or a dictionary"
-        )
-    if CONF_DEFAULTS in config or CONF_IMAGES in config:
-        # Version simplifiée qui évite les problèmes de validation complexe
-        return cv.Schema(
-            {
-                cv.Optional(CONF_DEFAULTS): dict,
-                cv.Required(CONF_IMAGES): cv.ensure_list(IMAGE_SCHEMA_NO_DEFAULTS),
-            }
-        )(config)
-    if CONF_ID in config or CONF_FILE in config:
-        return cv.ensure_list(IMAGE_SCHEMA)([config])
-    return cv.Schema(
-        {cv.Optional(t.lower()): typed_image_schema(t) for t in IMAGE_TYPE}
-    )(config)
-
-
-CONFIG_SCHEMA = _config_schema
 
 
 async def write_image(config, all_frames=False):
@@ -695,48 +595,32 @@ async def write_image(config, all_frames=False):
 
 
 async def to_code(config):
-    if isinstance(config, list):
-        for entry in config:
-            await to_code(entry)
-    elif CONF_ID not in config:
-        for entry in config.values():
-            await to_code(entry)
-    else:
-        # Traitement des images avec defaults
-        if isinstance(config, dict) and CONF_IMAGES in config:
-            defaults = config.get(CONF_DEFAULTS, {})
-            for image_config in config[CONF_IMAGES]:
-                # Appliquer les defaults manuellement
-                final_config = dict(defaults)
-                final_config.update(image_config)
-                await to_code(final_config)
-            return
-            
+    for entry in config:
         # Vérifier si c'est une image SD card
-        if config.get(CONF_SOURCE) == SOURCE_SD_CARD:
+        if entry.get(CONF_SOURCE) == SOURCE_SD_CARD:
             # Ajouter la dépendance au composant sd_mmc_card
             cg.add_define("USE_SD_MMC_CARD")
             
             # Créer une instance SDCardImage
             var = cg.new_Pvariable(
-                config[CONF_ID],
-                config[CONF_FILE],  # chemin sur la SD
-                get_image_type_enum(config[CONF_TYPE]),
-                get_transparency_enum(config[CONF_TRANSPARENCY])
+                entry[CONF_ID],
+                entry[CONF_FILE],  # chemin sur la SD
+                get_image_type_enum(entry[CONF_TYPE]),
+                get_transparency_enum(entry[CONF_TRANSPARENCY])
             )
             
             # Configurer les options si présentes
-            if CONF_RESIZE in config:
-                cg.add(var.set_resize(config[CONF_RESIZE][0], config[CONF_RESIZE][1]))
-            if config.get(CONF_DITHER) == "FLOYDSTEINBERG":
+            if CONF_RESIZE in entry:
+                cg.add(var.set_resize(entry[CONF_RESIZE][0], entry[CONF_RESIZE][1]))
+            if entry.get(CONF_DITHER) == "FLOYDSTEINBERG":
                 cg.add(var.set_dither(True))
-            if config.get(CONF_INVERT_ALPHA, False):
+            if entry.get(CONF_INVERT_ALPHA, False):
                 cg.add(var.set_invert_alpha(True))
-            if byte_order := config.get(CONF_BYTE_ORDER):
+            if byte_order := entry.get(CONF_BYTE_ORDER):
                 cg.add(var.set_big_endian(byte_order == "BIG_ENDIAN"))
         else:
             # Image normale (locale, web, mdi, etc.)
-            prog_arr, width, height, image_type, trans_value, _ = await write_image(config)
+            prog_arr, width, height, image_type, trans_value, _ = await write_image(entry)
             cg.new_Pvariable(
-                config[CONF_ID], prog_arr, width, height, image_type, trans_value
+                entry[CONF_ID], prog_arr, width, height, image_type, trans_value
             )
