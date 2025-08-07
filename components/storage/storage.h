@@ -179,6 +179,10 @@ class SdImageComponent : public Component, public display::BaseImage {
   // Validation
   bool validate_dimensions() const;
   bool validate_file_path() const;
+
+  // NOUVELLES MÉTHODES AJOUTÉES
+  bool validate_image_header(const std::vector<uint8_t> &data);  // Validation des en-têtes d'images
+  bool extract_image_dimensions(const std::vector<uint8_t> &data, int &width, int &height);  // Extraction dynamique des dimensions
 };
 
 // Classes pour les actions d'automatisation
