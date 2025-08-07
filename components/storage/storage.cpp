@@ -123,7 +123,7 @@ void SdImageComponent::dump_config() {
   ESP_LOGCONFIG(TAG_IMAGE, "  Dimensions: %dx%d", width_, height_);
   ESP_LOGCONFIG(TAG_IMAGE, "  Format: %s", get_format_string().c_str());
   ESP_LOGCONFIG(TAG_IMAGE, "  Byte Order: %s", 
-                byte_order_ == ByteOrder::Little Endian ? "Little Endian" : "Big Endian");
+                byte_order_ == ByteOrder::Little_Endian ? "Little Endian" : "Big Endian");
   ESP_LOGCONFIG(TAG_IMAGE, "  Expected Size: %zu bytes", expected_data_size_);
   ESP_LOGCONFIG(TAG_IMAGE, "  Cache Enabled: %s", cache_enabled_ ? "YES" : "NO");
   ESP_LOGCONFIG(TAG_IMAGE, "  Preload: %s", preload_ ? "YES" : "NO");
@@ -135,12 +135,12 @@ void SdImageComponent::dump_config() {
 }
 
 void SdImageComponent::set_format_string(const std::string &format) {
-  if (format == "RGB565") format_ = ImageFormat::RGB565;
-  else if (format == "RGB888") format_ = ImageFormat::RGB888;
-  else if (format == "RGBA") format_ = ImageFormat::RGBA;
-  else if (format == "GRAYSCALE") format_ = ImageFormat::GRAYSCALE;
-  else if (format == "BINARY") format_ = ImageFormat::BINARY;
-  else format_ = ImageFormat::RGB565; // default
+  if (format == "RGB565") format_ = ImageFormat::rgb565;
+  else if (format == "RGB888") format_ = ImageFormat::rgb888;
+  else if (format == "RGBA") format_ = ImageFormat::rgba;
+  else if (format == "GRAYSCALE") format_ = ImageFormat::graycale;
+  else if (format == "BINARY") format_ = ImageFormat::binary;
+  else format_ = ImageFormat::rgb565; // default
 }
 
 void SdImageComponent::set_byte_order_string(const std::string &byte_order) {
