@@ -23,7 +23,7 @@ enum class ImageFormat {
   rgb565,
   rgb888,
   rgba,
-  grayscale,  // Fixed: was "graycale"
+  grayscale,
   binary
 };
 
@@ -69,7 +69,6 @@ class SdImageComponent : public Component, public display::BaseImage {
  public:
   SdImageComponent() = default;
 
-  
   void setup() override;
   void loop() override {}
   void dump_config() override;
@@ -79,12 +78,10 @@ class SdImageComponent : public Component, public display::BaseImage {
   void set_file_path(const std::string &path) { this->file_path_ = path; }
   void set_width(int width) { 
     this->width_ = width; 
-    // Mettre à jour aussi la classe parent Image
     this->width_override_ = width;
   }
   void set_height(int height) { 
     this->height_ = height; 
-    // Mettre à jour aussi la classe parent Image
     this->height_override_ = height;
   }
   void set_format(ImageFormat format) { this->format_ = format; }
@@ -110,10 +107,6 @@ class SdImageComponent : public Component, public display::BaseImage {
   
   // Méthodes héritées de image::Image - OBLIGATOIRES
   void draw(int x, int y, display::Display *display, Color color_on, Color color_off) override;
-  
-  // REMOVED: These methods don't exist in the base Image class or have different signatures
-  // const uint8_t *get_data_start() const override { return this->image_data_.data(); }
-  // ImageType get_type() const override;
   
   // Alternative methods for accessing image data
   const uint8_t *get_data_start() const { return this->image_data_.data(); }
