@@ -1,7 +1,6 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_PLATFORM, CONF_WIDTH, CONF_HEIGHT, CONF_FORMAT
-from esphome.components import image
 from esphome import automation
 
 DEPENDENCIES = ['sd_mmc_card']
@@ -26,8 +25,8 @@ CONF_PRELOAD = "preload"
 storage_ns = cg.esphome_ns.namespace('storage')
 StorageComponent = storage_ns.class_('StorageComponent', cg.Component)
 
-# NOUVEAU: Classe pour les images SD
-SdImageComponent = storage_ns.class_('SdImageComponent', image.Image, cg.Component)
+# NOUVEAU: Classe pour les images SD - Fix: Use cg.Component only
+SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component)
 
 # NOUVEAU: Classes pour les actions images
 SdImageLoadAction = storage_ns.class_('SdImageLoadAction', automation.Action)
@@ -93,8 +92,15 @@ async def to_code(config):
             cg.add(img_var.set_file_path(img_config[CONF_FILE_PATH]))
             cg.add(img_var.set_width(img_config[CONF_WIDTH]))
             cg.add(img_var.set_height(img_config[CONF_HEIGHT]))
-            cg.add(img_var.set_format(getattr(storage_ns, f"ImageFormat::{IMAGE_FORMAT[img_config[CONF_FORMAT]]}")))
-            cg.add(img_var.set_byte_order(getattr(storage_ns, f"ByteOrder::{BYTE_ORDER[img_config[CONF_BYTE_ORDER]]}")))
+            
+            # Fix: Access enum values correctly
+            format_enum = getattr(storage_ns, "ImageFormat")
+            format_value = getattr(format_enum, IMAGE_FORMAT[img_config[CONF_FORMAT]])
+            cg.add(img_var.set_format(format_value))
+            
+            byte_order_enum = getattr(storage_ns, "ByteOrder")
+            byte_order_value = getattr(byte_order_enum, BYTE_ORDER[img_config[CONF_BYTE_ORDER]])
+            cg.add(img_var.set_byte_order(byte_order_value))
             
             # Options avancées
             cg.add(img_var.set_cache_enabled(img_config[CONF_CACHE_ENABLED]))
