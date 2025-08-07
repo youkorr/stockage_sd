@@ -26,7 +26,7 @@ CONF_PRELOAD = "preload"
 
 storage_ns = cg.esphome_ns.namespace('storage')
 StorageComponent = storage_ns.class_('StorageComponent', cg.Component)
-//SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component)
+#SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component)
 
 SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, image.Image)
 
