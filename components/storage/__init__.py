@@ -207,16 +207,6 @@ async def sd_image_unload_to_code(config, action_id, template_arg, args):
     cg.add(var.set_parent(parent))
     return var
 
-# Export des schémas pour utilisation externe
-__all__ = [
-    "CONFIG_SCHEMA",
-    "SD_IMAGE_SCHEMA", 
-    "STANDALONE_SD_IMAGE_SCHEMA",
-    "to_code",
-    "standalone_sd_image_to_code",
-    "StorageComponent",
-    "SdImageComponent"
-]
 
 
 
