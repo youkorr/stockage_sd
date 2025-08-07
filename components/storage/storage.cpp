@@ -1,82 +1,151 @@
-#include "sd_image.h"
+#include "storage.h"
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
 
 namespace esphome {
-namespace sd_image {
+namespace storage {
 
-static const char *const TAG = "sd_image";
+static const char *const TAG = "storage";
+static const char *const TAG_IMAGE = "storage.sd_image";
 
-void SdImageComponent::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up SD Image Component...");
+// ======== StorageComponent Implementation ========
+
+void StorageComponent::setup() {
+  ESP_LOGCONFIG(TAG, "Setting up Storage Component...");
   
-  // Vérifier la disponibilité des composants
-  if (!storage_component_ && !sd_component_) {
-    ESP_LOGE(TAG, "Neither storage component nor SD component is set!");
+  if (!sd_component_) {
+    ESP_LOGE(TAG, "SD component not set!");
     this->mark_failed();
     return;
   }
   
-  if (storage_component_) {
-    ESP_LOGD(TAG, "Using storage component for image access");
-  } else if (sd_component_) {
-    ESP_LOGD(TAG, "Using direct SD component for image access");
+  ESP_LOGD(TAG, "Platform: %s", platform_.c_str());
+  if (cache_size_ > 0) {
+    ESP_LOGD(TAG, "Cache size: %zu bytes", cache_size_);
+  }
+  
+  ESP_LOGCONFIG(TAG, "Storage Component setup complete");
+}
+
+void StorageComponent::loop() {
+  // Rien pour le moment
+}
+
+void StorageComponent::dump_config() {
+  ESP_LOGCONFIG(TAG, "Storage Component:");
+  ESP_LOGCONFIG(TAG, "  Platform: %s", platform_.c_str());
+  ESP_LOGCONFIG(TAG, "  Cache Size: %zu bytes", cache_size_);
+  ESP_LOGCONFIG(TAG, "  SD Component: %s", sd_component_ ? "Connected" : "Not Connected");
+}
+
+bool StorageComponent::file_exists_direct(const std::string &path) {
+  if (!sd_component_) {
+    ESP_LOGE(TAG, "SD component not available");
+    return false;
+  }
+  
+  return sd_component_->file_size(path) > 0;
+}
+
+std::vector<uint8_t> StorageComponent::read_file_direct(const std::string &path) {
+  if (!sd_component_) {
+    ESP_LOGE(TAG, "SD component not available");
+    return {};
+  }
+  
+  return sd_component_->read_file(path);
+}
+
+bool StorageComponent::write_file_direct(const std::string &path, const std::vector<uint8_t> &data) {
+  if (!sd_component_) {
+    ESP_LOGE(TAG, "SD component not available");
+    return false;
+  }
+  
+  return sd_component_->write_file(path, data);
+}
+
+size_t StorageComponent::get_file_size(const std::string &path) {
+  if (!sd_component_) {
+    ESP_LOGE(TAG, "SD component not available");
+    return 0;
+  }
+  
+  return sd_component_->file_size(path);
+}
+
+// ======== SdImageComponent Implementation ========
+
+void SdImageComponent::setup() {
+  ESP_LOGCONFIG(TAG_IMAGE, "Setting up SD Image Component...");
+  
+  if (!storage_component_) {
+    ESP_LOGE(TAG_IMAGE, "Storage component not set!");
+    this->mark_failed();
+    return;
   }
   
   if (!validate_dimensions()) {
-    ESP_LOGE(TAG, "Invalid image dimensions: %dx%d", width_, height_);
+    ESP_LOGE(TAG_IMAGE, "Invalid image dimensions: %dx%d", width_, height_);
     this->mark_failed();
     return;
   }
   
   if (!validate_file_path()) {
-    ESP_LOGE(TAG, "Invalid file path: %s", file_path_.c_str());
+    ESP_LOGE(TAG_IMAGE, "Invalid file path: %s", file_path_.c_str());
     this->mark_failed();
     return;
   }
   
-  // Vérifier si le fichier existe sur la SD (en utilisant le composant disponible)
-  bool file_exists = false;
-  if (storage_component_) {
-    file_exists = storage_component_->file_exists_direct(file_path_);
-  } else if (sd_component_) {
-    file_exists = sd_component_->file_size(file_path_) > 0;
-  }
-  
-  if (!file_exists) {
-    ESP_LOGW(TAG, "Image file does not exist: %s", file_path_.c_str());
+  // Vérifier si le fichier existe sur la SD
+  if (!storage_component_->file_exists_direct(file_path_)) {
+    ESP_LOGW(TAG_IMAGE, "Image file does not exist: %s", file_path_.c_str());
     // Ne pas marquer comme failed, le fichier pourrait être ajouté plus tard
   } else {
-    ESP_LOGI(TAG, "Image file found: %s", file_path_.c_str());
+    ESP_LOGI(TAG_IMAGE, "Image file found: %s", file_path_.c_str());
   }
   
   // Précharger l'image si demandé
   if (preload_) {
     if (load_image()) {
-      ESP_LOGI(TAG, "Image preloaded successfully");
+      ESP_LOGI(TAG_IMAGE, "Image preloaded successfully");
     } else {
-      ESP_LOGW(TAG, "Failed to preload image");
+      ESP_LOGW(TAG_IMAGE, "Failed to preload image");
     }
   }
   
-  ESP_LOGCONFIG(TAG, "SD Image Component setup complete");
+  ESP_LOGCONFIG(TAG_IMAGE, "SD Image Component setup complete");
 }
 
 void SdImageComponent::dump_config() {
-  ESP_LOGCONFIG(TAG, "SD Image:");
-  ESP_LOGCONFIG(TAG, "  File Path: %s", file_path_.c_str());
-  ESP_LOGCONFIG(TAG, "  Dimensions: %dx%d", width_, height_);
-  ESP_LOGCONFIG(TAG, "  Format: %s", get_format_string().c_str());
-  ESP_LOGCONFIG(TAG, "  Byte Order: %s", 
+  ESP_LOGCONFIG(TAG_IMAGE, "SD Image:");
+  ESP_LOGCONFIG(TAG_IMAGE, "  File Path: %s", file_path_.c_str());
+  ESP_LOGCONFIG(TAG_IMAGE, "  Dimensions: %dx%d", width_, height_);
+  ESP_LOGCONFIG(TAG_IMAGE, "  Format: %s", get_format_string().c_str());
+  ESP_LOGCONFIG(TAG_IMAGE, "  Byte Order: %s", 
                 byte_order_ == ByteOrder::LITTLE_ENDIAN ? "Little Endian" : "Big Endian");
-  ESP_LOGCONFIG(TAG, "  Expected Size: %zu bytes", expected_data_size_);
-  ESP_LOGCONFIG(TAG, "  Cache Enabled: %s", cache_enabled_ ? "YES" : "NO");
-  ESP_LOGCONFIG(TAG, "  Preload: %s", preload_ ? "YES" : "NO");
-  ESP_LOGCONFIG(TAG, "  Currently Loaded: %s", is_loaded_ ? "YES" : "NO");
+  ESP_LOGCONFIG(TAG_IMAGE, "  Expected Size: %zu bytes", expected_data_size_);
+  ESP_LOGCONFIG(TAG_IMAGE, "  Cache Enabled: %s", cache_enabled_ ? "YES" : "NO");
+  ESP_LOGCONFIG(TAG_IMAGE, "  Preload: %s", preload_ ? "YES" : "NO");
+  ESP_LOGCONFIG(TAG_IMAGE, "  Currently Loaded: %s", is_loaded_ ? "YES" : "NO");
   
   if (is_loaded_) {
-    ESP_LOGCONFIG(TAG, "  Memory Usage: %zu bytes", get_memory_usage());
+    ESP_LOGCONFIG(TAG_IMAGE, "  Memory Usage: %zu bytes", get_memory_usage());
   }
+}
+
+void SdImageComponent::set_format_string(const std::string &format) {
+  if (format == "RGB565") format_ = ImageFormat::RGB565;
+  else if (format == "RGB888") format_ = ImageFormat::RGB888;
+  else if (format == "RGBA") format_ = ImageFormat::RGBA;
+  else if (format == "GRAYSCALE") format_ = ImageFormat::GRAYSCALE;
+  else if (format == "BINARY") format_ = ImageFormat::BINARY;
+  else format_ = ImageFormat::RGB565; // default
+}
+
+void SdImageComponent::set_byte_order_string(const std::string &byte_order) {
+  if (byte_order == "BIG_ENDIAN") byte_order_ = ByteOrder::BIG_ENDIAN;
+  else byte_order_ = ByteOrder::LITTLE_ENDIAN; // default
 }
 
 bool SdImageComponent::load_image() {
@@ -84,10 +153,10 @@ bool SdImageComponent::load_image() {
 }
 
 bool SdImageComponent::load_image_from_path(const std::string &path) {
-  ESP_LOGD(TAG, "Loading image from: %s", path.c_str());
+  ESP_LOGD(TAG_IMAGE, "Loading image from: %s", path.c_str());
   
-  if (!storage_component_ && !sd_component_) {
-    ESP_LOGE(TAG, "No SD access component available");
+  if (!storage_component_) {
+    ESP_LOGE(TAG_IMAGE, "Storage component not available");
     return false;
   }
   
@@ -97,34 +166,22 @@ bool SdImageComponent::load_image_from_path(const std::string &path) {
   }
   
   // Vérifier si le fichier existe
-  bool file_exists = false;
-  if (storage_component_) {
-    file_exists = storage_component_->file_exists_direct(path);
-  } else if (sd_component_) {
-    file_exists = sd_component_->file_size(path) > 0;
-  }
-  
-  if (!file_exists) {
-    ESP_LOGE(TAG, "Image file not found: %s", path.c_str());
+  if (!storage_component_->file_exists_direct(path)) {
+    ESP_LOGE(TAG_IMAGE, "Image file not found: %s", path.c_str());
     return false;
   }
   
   // Lire les données depuis la SD
-  std::vector<uint8_t> data;
-  if (storage_component_) {
-    data = storage_component_->read_file_direct(path);
-  } else if (sd_component_) {
-    data = sd_component_->read_file(path);
-  }
+  std::vector<uint8_t> data = storage_component_->read_file_direct(path);
   
   if (data.empty()) {
-    ESP_LOGE(TAG, "Failed to read image file: %s", path.c_str());
+    ESP_LOGE(TAG_IMAGE, "Failed to read image file: %s", path.c_str());
     return false;
   }
   
   // Vérifier la taille des données
   if (expected_data_size_ > 0 && data.size() != expected_data_size_) {
-    ESP_LOGW(TAG, "Image size mismatch. Expected: %zu, Got: %zu", 
+    ESP_LOGW(TAG_IMAGE, "Image size mismatch. Expected: %zu, Got: %zu", 
              expected_data_size_, data.size());
     // Continuer quand même, mais avec avertissement
   }
@@ -138,12 +195,12 @@ bool SdImageComponent::load_image_from_path(const std::string &path) {
   if (cache_enabled_) {
     image_data_ = std::move(data);
     is_loaded_ = true;
-    ESP_LOGD(TAG, "Image loaded and cached: %zu bytes", image_data_.size());
+    ESP_LOGD(TAG_IMAGE, "Image loaded and cached: %zu bytes", image_data_.size());
   } else {
     // Mode streaming - pas de cache
     streaming_mode_ = true;
     is_loaded_ = true;
-    ESP_LOGD(TAG, "Image loaded in streaming mode");
+    ESP_LOGD(TAG_IMAGE, "Image loaded in streaming mode");
   }
   
   // Mettre à jour le chemin actuel
@@ -153,7 +210,7 @@ bool SdImageComponent::load_image_from_path(const std::string &path) {
 }
 
 void SdImageComponent::unload_image() {
-  ESP_LOGD(TAG, "Unloading image");
+  ESP_LOGD(TAG_IMAGE, "Unloading image");
   
   if (cache_enabled_) {
     image_data_.clear();
@@ -163,11 +220,11 @@ void SdImageComponent::unload_image() {
   is_loaded_ = false;
   streaming_mode_ = false;
   
-  ESP_LOGD(TAG, "Image unloaded");
+  ESP_LOGD(TAG_IMAGE, "Image unloaded");
 }
 
 bool SdImageComponent::reload_image() {
-  ESP_LOGD(TAG, "Reloading image");
+  ESP_LOGD(TAG_IMAGE, "Reloading image");
   return load_image_from_path(file_path_);
 }
 
@@ -190,7 +247,7 @@ void SdImageComponent::get_pixel(int x, int y, uint8_t &red, uint8_t &green, uin
   
   size_t offset = get_pixel_offset(x, y);
   if (offset + get_pixel_size() > image_data_.size()) {
-    ESP_LOGE(TAG, "Pixel offset out of bounds: %zu", offset);
+    ESP_LOGE(TAG_IMAGE, "Pixel offset out of bounds: %zu", offset);
     red = green = blue = alpha = 0;
     return;
   }
@@ -201,7 +258,7 @@ void SdImageComponent::get_pixel(int x, int y, uint8_t &red, uint8_t &green, uin
 
 void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const {
   // Pour le mode streaming, lire directement depuis la SD
-  if (!storage_component_ && !sd_component_) {
+  if (!storage_component_) {
     red = green = blue = alpha = 0;
     return;
   }
@@ -210,12 +267,7 @@ void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &g
   size_t pixel_size = get_pixel_size();
   
   // Lire seulement les bytes nécessaires pour ce pixel
-  std::vector<uint8_t> data;
-  if (storage_component_) {
-    data = storage_component_->read_file_direct(file_path_);
-  } else if (sd_component_) {
-    data = sd_component_->read_file(file_path_);
-  }
+  std::vector<uint8_t> data = storage_component_->read_file_direct(file_path_);
   
   if (data.size() <= offset + pixel_size) {
     red = green = blue = alpha = 0;
@@ -224,23 +276,6 @@ void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &g
   
   const uint8_t *pixel_data = &data[offset];
   convert_pixel_format(x, y, pixel_data, red, green, blue, alpha);
-}
-
-image::ImageType SdImageComponent::get_type() const {
-  switch (format_) {
-    case ImageFormat::RGB565:
-      return image::IMAGE_TYPE_RGB565;
-    case ImageFormat::RGB888:
-      return image::IMAGE_TYPE_RGB24;
-    case ImageFormat::RGBA:
-      return image::IMAGE_TYPE_RGBA;
-    case ImageFormat::GRAYSCALE:
-      return image::IMAGE_TYPE_GRAYSCALE;
-    case ImageFormat::BINARY:
-      return image::IMAGE_TYPE_BINARY;
-    default:
-      return image::IMAGE_TYPE_RGB565;
-  }
 }
 
 void SdImageComponent::convert_pixel_format(int x, int y, const uint8_t *pixel_data,
@@ -355,13 +390,7 @@ bool SdImageComponent::validate_image_data() const {
   }
   
   // Pour le mode streaming, vérifier que le fichier existe et a la bonne taille
-  std::vector<uint8_t> data;
-  if (storage_component_) {
-    data = storage_component_->read_file_direct(file_path_);
-  } else if (sd_component_) {
-    data = sd_component_->read_file(file_path_);
-  }
-  
+  std::vector<uint8_t> data = storage_component_->read_file_direct(file_path_);
   return data.size() == expected_size;
 }
 
@@ -372,9 +401,22 @@ void SdImageComponent::free_cache() {
   }
 }
 
-}  // namespace sd_image
-}  // namespace esphome
+bool SdImageComponent::read_image_from_storage() {
+  if (!storage_component_) {
+    return false;
+  }
+  
+  std::vector<uint8_t> data = storage_component_->read_file_direct(file_path_);
+  if (data.empty()) {
+    return false;
+  }
+  
+  image_data_ = std::move(data);
+  return true;
+}
 
+}  // namespace storage
+}  // namespace esphome
 
 
 
