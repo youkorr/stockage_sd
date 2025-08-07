@@ -56,7 +56,7 @@ SD_IMAGE_SCHEMA = cv.Schema({
     cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER, lower=True),
     cv.Optional(CONF_CACHE_ENABLED, default=True): cv.boolean,
     cv.Optional(CONF_PRELOAD, default=False): cv.boolean,
-}).extend(cv.COMPONENT_SCHEMA).extend(image.IMAGE_SCHEMA)
+}).extend(cv.COMPONENT_SCHEMA)  # Enlever .extend(image.IMAGE_SCHEMA)
 
 CONFIG_SCHEMA = cv.Schema({
     cv.Required(CONF_PLATFORM): cv.one_of("sd_direct", lower=True),
@@ -145,6 +145,9 @@ async def process_sd_image_config(img_config, storage_component):
         data_size = img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] * format_sizes[format_key]
 
     cg.add(img_var.set_expected_data_size(data_size))
+    
+    # IMPORTANT: Enregistrer comme image pour ESPHome
+    cg.add_global(cg.RawStatement(f"// Register {img_config[CONF_ID].id} as image"))
     
     # CRUCIAL: Retourner la variable pour que ESPHome puisse la suivre
     return img_var
