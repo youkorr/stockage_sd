@@ -14,11 +14,11 @@ class StorageComponent;
 
 // Énumérations pour les formats d'image
 enum class ImageFormat {
-  RGB565,
-  RGB888,
-  RGBA,
-  GRAYSCALE,
-  BINARY
+  rgb565,
+  rgb888,
+  rgba,
+  graycale,
+  binary
 };
 
 enum class ByteOrder {
