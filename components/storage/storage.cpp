@@ -83,12 +83,15 @@ void SdImageComponent::setup() {
     this->mark_failed();
     return;
   }
+  // Calculer la taille attendue
   this->expected_data_size_ = this->calculate_expected_size();
+  // Vérifier si le fichier existe sur la SD
   if (!this->storage_component_->file_exists_direct(this->file_path_)) {
     ESP_LOGW(TAG_IMAGE, "Image file does not exist: %s", this->file_path_.c_str());
   } else {
     ESP_LOGI(TAG_IMAGE, "Image file found: %s", this->file_path_.c_str());
   }
+  // Précharger l'image si demandé
   if (this->preload_) {
     if (this->load_image()) {
       ESP_LOGI(TAG_IMAGE, "Image preloaded successfully");
@@ -123,7 +126,7 @@ void SdImageComponent::set_format_string(const std::string &format) {
   else if (format == "BINARY") this->format_ = ImageFormat::binary;
   else {
     ESP_LOGW(TAG_IMAGE, "Unknown format: %s, using RGB565", format.c_str());
-    this->format_ = ImageFormat::rgb565;
+    this->format_ = ImageFormat::rgb565; // Par défaut
   }
 }
 
@@ -132,7 +135,7 @@ void SdImageComponent::set_byte_order_string(const std::string &byte_order) {
   else if (byte_order == "LITTLE_ENDIAN") this->byte_order_ = ByteOrder::little_endian;
   else {
     ESP_LOGW(TAG_IMAGE, "Unknown byte order: %s, using little_endian", byte_order.c_str());
-    this->byte_order_ = ByteOrder::little_endian;
+    this->byte_order_ = ByteOrder::little_endian; // Par défaut
   }
 }
 
@@ -146,34 +149,57 @@ bool SdImageComponent::load_image_from_path(const std::string &path) {
     ESP_LOGE(TAG_IMAGE, "Storage component not available");
     return false;
   }
+  // Libérer l'image précédente si chargée
   if (this->is_loaded_) {
     this->unload_image();
   }
+  // Vérifier si le fichier existe
   if (!this->storage_component_->file_exists_direct(path)) {
     ESP_LOGE(TAG_IMAGE, "Image file not found: %s", path.c_str());
     return false;
   }
+  // Lire les données depuis la SD
   std::vector<uint8_t> data = this->storage_component_->read_file_direct(path);
   if (data.empty()) {
     ESP_LOGE(TAG_IMAGE, "Failed to read image file: %s", path.c_str());
     return false;
   }
+  // Valider les en-têtes de l'image
+  if (!this->validate_image_header(data)) {
+    ESP_LOGE(TAG_IMAGE, "Invalid image header for file: %s", path.c_str());
+    return false;
+  }
+  // Extraire dynamiquement les dimensions si non définies
+  if (this->width_ == 0 || this->height_ == 0) {
+    if (!this->extract_image_dimensions(data, this->width_, this->height_)) {
+      ESP_LOGE(TAG_IMAGE, "Failed to extract image dimensions");
+      return false;
+    }
+  }
+  // Recalculer la taille attendue après extraction des dimensions
+  this->expected_data_size_ = this->calculate_expected_size();
+  // Vérifier la taille des données
   if (this->expected_data_size_ > 0 && data.size() != this->expected_data_size_) {
     ESP_LOGW(TAG_IMAGE, "Image size mismatch. Expected: %zu, Got: %zu", 
              this->expected_data_size_, data.size());
+    // Continuer quand même, mais avec avertissement
   }
+  // Conversion de l'ordre des bytes si nécessaire
   if (this->byte_order_ == ByteOrder::big_endian && this->get_pixel_size() > 1) {
     this->convert_byte_order(data);
   }
+  // Stocker les données
   if (this->cache_enabled_) {
     this->image_data_ = std::move(data);
     this->is_loaded_ = true;
     ESP_LOGD(TAG_IMAGE, "Image loaded and cached: %zu bytes", this->image_data_.size());
   } else {
+    // Mode streaming - pas de cache
     this->streaming_mode_ = true;
     this->is_loaded_ = true;
     ESP_LOGD(TAG_IMAGE, "Image loaded in streaming mode");
   }
+  // Mettre à jour le chemin actuel
   this->file_path_ = path;
   return true;
 }
@@ -194,16 +220,20 @@ bool SdImageComponent::reload_image() {
   return this->load_image_from_path(this->file_path_);
 }
 
+// Méthodes héritées de image::Image
 void SdImageComponent::draw(int x, int y, display::Display *display, Color color_on, Color color_off) {
   if (!this->is_loaded_ || this->image_data_.empty()) {
     ESP_LOGW(TAG_IMAGE, "Cannot draw: image not loaded");
     return;
   }
+  // Dessiner pixel par pixel
   for (int img_y = 0; img_y < this->height_; img_y++) {
     for (int img_x = 0; img_x < this->width_; img_x++) {
       uint8_t red, green, blue, alpha;
       this->get_pixel(img_x, img_y, red, green, blue, alpha);
+      // Convertir en couleur ESPHome
       Color pixel_color = Color(red, green, blue);
+      // Dessiner le pixel sur le display
       display->draw_pixel_at(x + img_x, y + img_y, pixel_color);
     }
   }
@@ -211,12 +241,18 @@ void SdImageComponent::draw(int x, int y, display::Display *display, Color color
 
 ImageType SdImageComponent::get_image_type() const {
   switch (this->format_) {
-    case ImageFormat::rgb565: return image::IMAGE_TYPE_RGB565;
-    case ImageFormat::rgb888: return image::IMAGE_TYPE_RGB;
-    case ImageFormat::rgba: return image::IMAGE_TYPE_RGB;
-    case ImageFormat::grayscale: return image::IMAGE_TYPE_GRAYSCALE;
-    case ImageFormat::binary: return image::IMAGE_TYPE_BINARY;
-    default: return image::IMAGE_TYPE_RGB565;
+    case ImageFormat::rgb565:
+      return image::IMAGE_TYPE_RGB565;
+    case ImageFormat::rgb888:
+      return image::IMAGE_TYPE_RGB;  // ESPHome utilise RGB pour RGB24
+    case ImageFormat::rgba:
+      return image::IMAGE_TYPE_RGB;  // Fallback vers RGB
+    case ImageFormat::grayscale:
+      return image::IMAGE_TYPE_GRAYSCALE;
+    case ImageFormat::binary:
+      return image::IMAGE_TYPE_BINARY;
+    default:
+      return image::IMAGE_TYPE_RGB565;
   }
 }
 
@@ -309,12 +345,18 @@ void SdImageComponent::convert_pixel_format(int x, int y, const uint8_t *pixel_d
 
 size_t SdImageComponent::get_pixel_size() const {
   switch (this->format_) {
-    case ImageFormat::rgb565: return 2;
-    case ImageFormat::rgb888: return 3;
-    case ImageFormat::rgba: return 4;
-    case ImageFormat::grayscale: return 1;
-    case ImageFormat::binary: return 1;
-    default: return 2;
+    case ImageFormat::rgb565:
+      return 2;
+    case ImageFormat::rgb888:
+      return 3;
+    case ImageFormat::rgba:
+      return 4;
+    case ImageFormat::grayscale:
+      return 1;
+    case ImageFormat::binary:
+      return 1;
+    default:
+      return 2;
   }
 }
 
@@ -364,6 +406,34 @@ std::string SdImageComponent::get_format_string() const {
   }
 }
 
+bool SdImageComponent::validate_image_header(const std::vector<uint8_t> &data) {
+  if (data.size() < 8) {
+    ESP_LOGE(TAG_IMAGE, "Image data too small to validate header");
+    return false;
+  }
+  // Exemple simple pour PNG (signature PNG : 89 50 4E 47 0D 0A 1A 0A)
+  const uint8_t png_signature[8] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+  if (memcmp(data.data(), png_signature, 8) == 0) {
+    ESP_LOGD(TAG_IMAGE, "Valid PNG header detected");
+    return true;
+  }
+  // Ajoutez d'autres validations pour d'autres formats (JPEG, BMP, etc.)
+  ESP_LOGW(TAG_IMAGE, "Unsupported or invalid image format");
+  return false;
+}
+
+bool SdImageComponent::extract_image_dimensions(const std::vector<uint8_t> &data, int &width, int &height) {
+  if (data.size() < 24) {
+    ESP_LOGE(TAG_IMAGE, "Image data too small to extract dimensions");
+    return false;
+  }
+  // Exemple pour PNG (largeur et hauteur sont stockées dans les octets 16-23)
+  width = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19];
+  height = (data[20] << 24) | (data[21] << 16) | (data[22] << 8) | data[23];
+  ESP_LOGD(TAG_IMAGE, "Extracted dimensions: %dx%d", width, height);
+  return true;
+}
+
 bool SdImageComponent::validate_image_data() const {
   if (!this->is_loaded_) return false;
   size_t expected_size = this->calculate_expected_size();
@@ -379,18 +449,6 @@ void SdImageComponent::free_cache() {
     this->image_data_.clear();
     this->image_data_.shrink_to_fit();
   }
-}
-
-bool SdImageComponent::read_image_from_storage() {
-  if (!this->storage_component_) {
-    return false;
-  }
-  std::vector<uint8_t> data = this->storage_component_->read_file_direct(this->file_path_);
-  if (data.empty()) {
-    return false;
-  }
-  this->image_data_ = std::move(data);
-  return true;
 }
 
 }  // namespace storage
