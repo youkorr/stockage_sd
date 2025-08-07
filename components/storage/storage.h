@@ -129,8 +129,8 @@ class SdImageComponent : public Component {
   std::string file_path_;
   int width_{0};
   int height_{0};
-  ImageFormat format_{ImageFormat::RGB565};
-  ByteOrder byte_order_{ByteOrder::LITTLE_ENDIAN};
+  ImageFormat format_{ImageFormat::rgb565};
+  ByteOrder byte_order_{ByteOrder::little_endian};
   size_t expected_data_size_{0};
   bool cache_enabled_{true};
   bool preload_{false};
