@@ -62,7 +62,9 @@ bool StorageComponent::write_file_direct(const std::string &path, const std::vec
     return false;
   }
   
-  return sd_component_->write_file(path, data);
+  // Correction : utiliser les bons paramètres pour write_file
+  sd_component_->write_file(path.c_str(), data.data(), data.size());
+  return true;
 }
 
 size_t StorageComponent::get_file_size(const std::string &path) {
@@ -123,7 +125,7 @@ void SdImageComponent::dump_config() {
   ESP_LOGCONFIG(TAG_IMAGE, "  Dimensions: %dx%d", width_, height_);
   ESP_LOGCONFIG(TAG_IMAGE, "  Format: %s", get_format_string().c_str());
   ESP_LOGCONFIG(TAG_IMAGE, "  Byte Order: %s", 
-                byte_order_ == ByteOrder::Little_Endian ? "Little Endian" : "Big Endian");
+                byte_order_ == ByteOrder::little_endian ? "Little Endian" : "Big Endian");
   ESP_LOGCONFIG(TAG_IMAGE, "  Expected Size: %zu bytes", expected_data_size_);
   ESP_LOGCONFIG(TAG_IMAGE, "  Cache Enabled: %s", cache_enabled_ ? "YES" : "NO");
   ESP_LOGCONFIG(TAG_IMAGE, "  Preload: %s", preload_ ? "YES" : "NO");
@@ -228,6 +230,13 @@ bool SdImageComponent::reload_image() {
   return load_image_from_path(file_path_);
 }
 
+// Version sans alpha
+void SdImageComponent::get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const {
+  uint8_t alpha;
+  get_pixel(x, y, red, green, blue, alpha);
+}
+
+// Version avec alpha
 void SdImageComponent::get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const {
   // Vérification des bornes
   if (x < 0 || x >= width_ || y < 0 || y >= height_) {
@@ -256,6 +265,13 @@ void SdImageComponent::get_pixel(int x, int y, uint8_t &red, uint8_t &green, uin
   convert_pixel_format(x, y, pixel_data, red, green, blue, alpha);
 }
 
+// Version sans alpha pour streaming
+void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const {
+  uint8_t alpha;
+  get_pixel_streamed(x, y, red, green, blue, alpha);
+}
+
+// Version avec alpha pour streaming
 void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const {
   // Pour le mode streaming, lire directement depuis la SD
   if (!storage_component_) {
@@ -417,6 +433,7 @@ bool SdImageComponent::read_image_from_storage() {
 
 }  // namespace storage
 }  // namespace esphome
+
 
 
 
