@@ -1,334 +1,378 @@
-#include "storage.h"
+#include "sd_image.h"
 #include "esphome/core/log.h"
 #include "esphome/core/hal.h"
 
 namespace esphome {
-namespace storage {
+namespace sd_image {
 
-static const char *const TAG = "storage";
+static const char *const TAG = "sd_image";
 
-// Instance globale pour hooks
-StorageComponent* StorageComponent::global_instance_ = nullptr;
-
-// ===========================================
-// Implémentation StorageFile avec SdMmc existant
-// ===========================================
-
-void StorageFile::stream_direct(std::function<void(const uint8_t*, size_t)> callback) {
-  if (!is_sd_direct() || !sd_component_) {
-    ESP_LOGE(TAG, "SD direct not available for file %s", path_.c_str());
+void SdImageComponent::setup() {
+  ESP_LOGCONFIG(TAG, "Setting up SD Image Component...");
+  
+  // Vérifier la disponibilité des composants
+  if (!storage_component_ && !sd_component_) {
+    ESP_LOGE(TAG, "Neither storage component nor SD component is set!");
+    this->mark_failed();
     return;
   }
   
-  ESP_LOGD(TAG, "Streaming file %s directly from SD", path_.c_str());
+  if (storage_component_) {
+    ESP_LOGD(TAG, "Using storage component for image access");
+  } else if (sd_component_) {
+    ESP_LOGD(TAG, "Using direct SD component for image access");
+  }
   
-  // Utilise la méthode read_file_stream existante
-  sd_component_->read_file_stream(path_.c_str(), 0, chunk_size_, callback);
-}
-
-void StorageFile::stream_chunked_direct(std::function<void(const uint8_t*, size_t)> callback) {
-  if (!is_sd_direct() || !sd_component_) {
-    ESP_LOGE(TAG, "SD direct not available for file %s", path_.c_str());
+  if (!validate_dimensions()) {
+    ESP_LOGE(TAG, "Invalid image dimensions: %dx%d", width_, height_);
+    this->mark_failed();
     return;
   }
   
-  // Stream par chunks en utilisant la méthode read_file_chunked existante
-  size_t offset = 0;
-  size_t file_size = get_file_size_direct();
-  
-  ESP_LOGD(TAG, "Streaming file %s in chunks of %u bytes", path_.c_str(), chunk_size_);
-  
-  while (offset < file_size) {
-    size_t current_chunk = std::min((size_t)chunk_size_, file_size - offset);
-    auto chunk_data = sd_component_->read_file_chunked(path_, offset, current_chunk);
-    
-    if (chunk_data.empty()) {
-      ESP_LOGE(TAG, "Failed to read chunk at offset %zu", offset);
-      break;
-    }
-    
-    // Callback direct - pas de stockage en RAM
-    callback(chunk_data.data(), chunk_data.size());
-    offset += current_chunk;
-  }
-}
-
-std::vector<uint8_t> StorageFile::read_direct() {
-  if (!is_sd_direct() || !sd_component_) {
-    return {};
-  }
-  
-  ESP_LOGD(TAG, "Reading file %s directly from SD", path_.c_str());
-  return sd_component_->read_file(path_);
-}
-
-bool StorageFile::read_audio_chunk(size_t offset, uint8_t* buffer, size_t buffer_size, size_t& bytes_read) {
-  if (!is_sd_direct() || !sd_component_) {
-    return false;
-  }
-  
-  // Lecture directe chunk par chunk pour audio en utilisant la méthode existante
-  auto chunk_data = sd_component_->read_file_chunked(path_, offset, buffer_size);
-  bytes_read = chunk_data.size();
-  
-  if (bytes_read > 0) {
-    memcpy(buffer, chunk_data.data(), bytes_read);
-    current_position_ = offset + bytes_read;
-    return true;
-  }
-  
-  return false;
-}
-
-size_t StorageFile::get_file_size_direct() const {
-  if (!file_size_cached_) {
-    if (is_sd_direct() && sd_component_) {
-      cached_file_size_ = sd_component_->file_size(path_);
-    } else {
-      cached_file_size_ = 0;
-    }
-    file_size_cached_ = true;
-  }
-  return cached_file_size_;
-}
-
-bool StorageFile::file_exists_direct() const {
-  if (!is_sd_direct() || !sd_component_) {
-    return false;
-  }
-  
-  return sd_component_->file_size(path_) > 0;
-}
-
-std::string StorageFile::get_http_url() const {
-  // Extraire le nom du fichier du chemin
-  std::string filename = path_;
-  size_t pos = path_.find_last_of("/\\");
-  if (pos != std::string::npos) {
-    filename = path_.substr(pos + 1);
-  }
-  
-  // Générer une URL HTTP
-  return "/sd/" + filename;
-}
-
-// ===========================================
-// Implémentation StorageComponent
-// ===========================================
-
-void StorageComponent::setup() {
-  ESP_LOGCONFIG(TAG, "Setting up Storage Component...");
-  
-  // Configurer l'instance globale pour hooks
-  StorageComponent::set_global_instance(this);
-  
-  if (platform_ == "sd_card" || platform_ == "sd_direct") {
-    setup_sd_direct();
-    
-    // Configurer le serveur HTTP si disponible
-    if (web_server_ != nullptr) {
-      setup_http_handlers();
-    }
-  } else if (platform_ == "flash") {
-    setup_flash();
-  } else if (platform_ == "inline") {
-    setup_inline();
-  }
-  
-  ESP_LOGCONFIG(TAG, "Storage Component setup complete. Platform: %s, Files: %zu", 
-                platform_.c_str(), files_.size());
-}
-
-void StorageComponent::setup_sd_direct() {
-  ESP_LOGCONFIG(TAG, "Configuring SD direct access...");
-  
-  if (!sd_component_) {
-    ESP_LOGE(TAG, "SD component not set for SD direct platform!");
+  if (!validate_file_path()) {
+    ESP_LOGE(TAG, "Invalid file path: %s", file_path_.c_str());
+    this->mark_failed();
     return;
   }
   
-  // Nous supposons que la carte SD est déjà montée et initialisée par le composant sd_mmc_card
-  ESP_LOGD(TAG, "Using pre-initialized SD card component");
-  
-  // Vérifier si la carte SD est accessible en essayant de lire un fichier
-  bool sd_accessible = false;
-  for (auto *file : files_) {
-    if (sd_component_->file_size(file->get_path()) > 0) {
-      sd_accessible = true;
-      break;
-    }
+  // Vérifier si le fichier existe sur la SD (en utilisant le composant disponible)
+  bool file_exists = false;
+  if (storage_component_) {
+    file_exists = storage_component_->file_exists_direct(file_path_);
+  } else if (sd_component_) {
+    file_exists = sd_component_->file_size(file_path_) > 0;
   }
   
-  if (!sd_accessible) {
-    ESP_LOGW(TAG, "SD card might not be accessible - no files found");
+  if (!file_exists) {
+    ESP_LOGW(TAG, "Image file does not exist: %s", file_path_.c_str());
+    // Ne pas marquer comme failed, le fichier pourrait être ajouté plus tard
   } else {
-    ESP_LOGD(TAG, "SD card is accessible");
+    ESP_LOGI(TAG, "Image file found: %s", file_path_.c_str());
   }
   
-  // Configurer tous les fichiers pour SD direct
-  for (auto *file : files_) {
-    file->set_sd_component(sd_component_);
-    file->set_platform("sd_direct");
-    ESP_LOGD(TAG, "Configured file %s for SD direct access", file->get_path().c_str());
-    
-    // Vérifier si le fichier existe
-    if (file->file_exists_direct()) {
-      ESP_LOGD(TAG, "File exists: %s, size: %d bytes", 
-               file->get_path().c_str(), file->get_file_size_direct());
+  // Précharger l'image si demandé
+  if (preload_) {
+    if (load_image()) {
+      ESP_LOGI(TAG, "Image preloaded successfully");
     } else {
-      ESP_LOGW(TAG, "File does not exist: %s", file->get_path().c_str());
+      ESP_LOGW(TAG, "Failed to preload image");
     }
   }
   
-  platform_ = "sd_direct";
-  ESP_LOGI(TAG, "SD direct access enabled - files read directly from SD without flash usage");
+  ESP_LOGCONFIG(TAG, "SD Image Component setup complete");
 }
 
-void StorageComponent::setup_sd_card() {
-  // Ancienne méthode - on redirige vers sd_direct
-  ESP_LOGW(TAG, "sd_card platform deprecated, using sd_direct instead");
-  setup_sd_direct();
-}
-
-void StorageComponent::setup_flash() {
-  ESP_LOGCONFIG(TAG, "Using flash storage (embedded files)");
-  // Implementation existante pour flash
-}
-
-void StorageComponent::setup_inline() {
-  ESP_LOGCONFIG(TAG, "Using inline storage");
-  // Implementation existante pour inline
-}
-
-std::string StorageComponent::get_file_path(const std::string &file_id) const {
-  for (const auto *file : files_) {
-    if (file->get_id() == file_id) {
-      return file->get_path();
-    }
-  }
-  return "";
-}
-
-StorageFile* StorageComponent::get_file_by_path(const std::string &path) {
-  for (auto *file : files_) {
-    if (file->get_path() == path) {
-      return file;
-    }
-  }
-  return nullptr;
-}
-
-StorageFile* StorageComponent::get_file_by_id(const std::string &id) {
-  for (auto *file : files_) {
-    if (file->get_id() == id) {
-      return file;
-    }
-  }
-  return nullptr;
-}
-
-std::vector<uint8_t> StorageComponent::read_file_direct(const std::string &path) {
-  if (!sd_component_) {
-    return {};
-  }
+void SdImageComponent::dump_config() {
+  ESP_LOGCONFIG(TAG, "SD Image:");
+  ESP_LOGCONFIG(TAG, "  File Path: %s", file_path_.c_str());
+  ESP_LOGCONFIG(TAG, "  Dimensions: %dx%d", width_, height_);
+  ESP_LOGCONFIG(TAG, "  Format: %s", get_format_string().c_str());
+  ESP_LOGCONFIG(TAG, "  Byte Order: %s", 
+                byte_order_ == ByteOrder::LITTLE_ENDIAN ? "Little Endian" : "Big Endian");
+  ESP_LOGCONFIG(TAG, "  Expected Size: %zu bytes", expected_data_size_);
+  ESP_LOGCONFIG(TAG, "  Cache Enabled: %s", cache_enabled_ ? "YES" : "NO");
+  ESP_LOGCONFIG(TAG, "  Preload: %s", preload_ ? "YES" : "NO");
+  ESP_LOGCONFIG(TAG, "  Currently Loaded: %s", is_loaded_ ? "YES" : "NO");
   
-  ESP_LOGD(TAG, "Reading file %s directly from SD", path.c_str());
-  return sd_component_->read_file(path);
+  if (is_loaded_) {
+    ESP_LOGCONFIG(TAG, "  Memory Usage: %zu bytes", get_memory_usage());
+  }
 }
 
-bool StorageComponent::file_exists_direct(const std::string &path) {
-  if (!sd_component_) {
+bool SdImageComponent::load_image() {
+  return load_image_from_path(file_path_);
+}
+
+bool SdImageComponent::load_image_from_path(const std::string &path) {
+  ESP_LOGD(TAG, "Loading image from: %s", path.c_str());
+  
+  if (!storage_component_ && !sd_component_) {
+    ESP_LOGE(TAG, "No SD access component available");
     return false;
   }
   
-  return sd_component_->file_size(path) > 0;
+  // Libérer l'image précédente si chargée
+  if (is_loaded_) {
+    unload_image();
+  }
+  
+  // Vérifier si le fichier existe
+  bool file_exists = false;
+  if (storage_component_) {
+    file_exists = storage_component_->file_exists_direct(path);
+  } else if (sd_component_) {
+    file_exists = sd_component_->file_size(path) > 0;
+  }
+  
+  if (!file_exists) {
+    ESP_LOGE(TAG, "Image file not found: %s", path.c_str());
+    return false;
+  }
+  
+  // Lire les données depuis la SD
+  std::vector<uint8_t> data;
+  if (storage_component_) {
+    data = storage_component_->read_file_direct(path);
+  } else if (sd_component_) {
+    data = sd_component_->read_file(path);
+  }
+  
+  if (data.empty()) {
+    ESP_LOGE(TAG, "Failed to read image file: %s", path.c_str());
+    return false;
+  }
+  
+  // Vérifier la taille des données
+  if (expected_data_size_ > 0 && data.size() != expected_data_size_) {
+    ESP_LOGW(TAG, "Image size mismatch. Expected: %zu, Got: %zu", 
+             expected_data_size_, data.size());
+    // Continuer quand même, mais avec avertissement
+  }
+  
+  // Conversion de l'ordre des bytes si nécessaire
+  if (byte_order_ == ByteOrder::BIG_ENDIAN && get_pixel_size() > 1) {
+    convert_byte_order(data);
+  }
+  
+  // Stocker les données
+  if (cache_enabled_) {
+    image_data_ = std::move(data);
+    is_loaded_ = true;
+    ESP_LOGD(TAG, "Image loaded and cached: %zu bytes", image_data_.size());
+  } else {
+    // Mode streaming - pas de cache
+    streaming_mode_ = true;
+    is_loaded_ = true;
+    ESP_LOGD(TAG, "Image loaded in streaming mode");
+  }
+  
+  // Mettre à jour le chemin actuel
+  file_path_ = path;
+  
+  return true;
 }
 
-void StorageComponent::stream_file_direct(const std::string &path, std::function<void(const uint8_t*, size_t)> callback) {
-  if (!sd_component_) {
-    ESP_LOGE(TAG, "SD component not available for streaming");
+void SdImageComponent::unload_image() {
+  ESP_LOGD(TAG, "Unloading image");
+  
+  if (cache_enabled_) {
+    image_data_.clear();
+    image_data_.shrink_to_fit();
+  }
+  
+  is_loaded_ = false;
+  streaming_mode_ = false;
+  
+  ESP_LOGD(TAG, "Image unloaded");
+}
+
+bool SdImageComponent::reload_image() {
+  ESP_LOGD(TAG, "Reloading image");
+  return load_image_from_path(file_path_);
+}
+
+void SdImageComponent::get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const {
+  // Vérification des bornes
+  if (x < 0 || x >= width_ || y < 0 || y >= height_) {
+    red = green = blue = alpha = 0;
     return;
   }
   
-  ESP_LOGD(TAG, "Streaming file %s directly from SD", path.c_str());
+  if (streaming_mode_) {
+    get_pixel_streamed(x, y, red, green, blue, alpha);
+    return;
+  }
   
-  // Utilise la méthode read_file_stream existante
-  sd_component_->read_file_stream(path.c_str(), 0, 1024, callback);
+  if (!is_loaded_ || image_data_.empty()) {
+    red = green = blue = alpha = 0;
+    return;
+  }
+  
+  size_t offset = get_pixel_offset(x, y);
+  if (offset + get_pixel_size() > image_data_.size()) {
+    ESP_LOGE(TAG, "Pixel offset out of bounds: %zu", offset);
+    red = green = blue = alpha = 0;
+    return;
+  }
+  
+  const uint8_t *pixel_data = &image_data_[offset];
+  convert_pixel_format(x, y, pixel_data, red, green, blue, alpha);
 }
 
-std::string StorageComponent::get_http_url_for_file(const std::string &file_id) const {
-  StorageFile *file = nullptr;
-  for (auto *f : files_) {
-    if (f->get_id() == file_id) {
-      file = f;
+void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const {
+  // Pour le mode streaming, lire directement depuis la SD
+  if (!storage_component_ && !sd_component_) {
+    red = green = blue = alpha = 0;
+    return;
+  }
+  
+  size_t offset = get_pixel_offset(x, y);
+  size_t pixel_size = get_pixel_size();
+  
+  // Lire seulement les bytes nécessaires pour ce pixel
+  std::vector<uint8_t> data;
+  if (storage_component_) {
+    data = storage_component_->read_file_direct(file_path_);
+  } else if (sd_component_) {
+    data = sd_component_->read_file(file_path_);
+  }
+  
+  if (data.size() <= offset + pixel_size) {
+    red = green = blue = alpha = 0;
+    return;
+  }
+  
+  const uint8_t *pixel_data = &data[offset];
+  convert_pixel_format(x, y, pixel_data, red, green, blue, alpha);
+}
+
+image::ImageType SdImageComponent::get_type() const {
+  switch (format_) {
+    case ImageFormat::RGB565:
+      return image::IMAGE_TYPE_RGB565;
+    case ImageFormat::RGB888:
+      return image::IMAGE_TYPE_RGB24;
+    case ImageFormat::RGBA:
+      return image::IMAGE_TYPE_RGBA;
+    case ImageFormat::GRAYSCALE:
+      return image::IMAGE_TYPE_GRAYSCALE;
+    case ImageFormat::BINARY:
+      return image::IMAGE_TYPE_BINARY;
+    default:
+      return image::IMAGE_TYPE_RGB565;
+  }
+}
+
+void SdImageComponent::convert_pixel_format(int x, int y, const uint8_t *pixel_data,
+                                           uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const {
+  switch (format_) {
+    case ImageFormat::RGB565: {
+      uint16_t pixel = (pixel_data[1] << 8) | pixel_data[0];
+      red = ((pixel >> 11) & 0x1F) << 3;
+      green = ((pixel >> 5) & 0x3F) << 2;
+      blue = (pixel & 0x1F) << 3;
+      alpha = 255;
+      break;
+    }
+    case ImageFormat::RGB888:
+      red = pixel_data[0];
+      green = pixel_data[1];
+      blue = pixel_data[2];
+      alpha = 255;
+      break;
+    case ImageFormat::RGBA:
+      red = pixel_data[0];
+      green = pixel_data[1];
+      blue = pixel_data[2];
+      alpha = pixel_data[3];
+      break;
+    case ImageFormat::GRAYSCALE:
+      red = green = blue = pixel_data[0];
+      alpha = 255;
+      break;
+    case ImageFormat::BINARY: {
+      int byte_index = (y * width_ + x) / 8;
+      int bit_index = (y * width_ + x) % 8;
+      bool pixel_on = (pixel_data[byte_index] >> (7 - bit_index)) & 1;
+      red = green = blue = pixel_on ? 255 : 0;
+      alpha = 255;
       break;
     }
   }
+}
+
+size_t SdImageComponent::get_pixel_size() const {
+  switch (format_) {
+    case ImageFormat::RGB565:
+      return 2;
+    case ImageFormat::RGB888:
+      return 3;
+    case ImageFormat::RGBA:
+      return 4;
+    case ImageFormat::GRAYSCALE:
+      return 1;
+    case ImageFormat::BINARY:
+      return 1; // Géré spécialement
+    default:
+      return 2;
+  }
+}
+
+size_t SdImageComponent::get_pixel_offset(int x, int y) const {
+  if (format_ == ImageFormat::BINARY) {
+    return (y * width_ + x) / 8;
+  }
+  return (y * width_ + x) * get_pixel_size();
+}
+
+void SdImageComponent::convert_byte_order(std::vector<uint8_t> &data) {
+  size_t pixel_size = get_pixel_size();
   
-  if (!file) {
-    return "";
+  if (pixel_size <= 1) return;
+  
+  for (size_t i = 0; i < data.size(); i += pixel_size) {
+    if (pixel_size == 2) {
+      std::swap(data[i], data[i + 1]);
+    } else if (pixel_size == 4) {
+      std::swap(data[i], data[i + 3]);
+      std::swap(data[i + 1], data[i + 2]);
+    }
+  }
+}
+
+bool SdImageComponent::validate_dimensions() const {
+  return width_ > 0 && height_ > 0 && width_ <= 1024 && height_ <= 768;
+}
+
+bool SdImageComponent::validate_file_path() const {
+  return !file_path_.empty() && file_path_[0] == '/';
+}
+
+size_t SdImageComponent::calculate_expected_size() const {
+  if (format_ == ImageFormat::BINARY) {
+    return (width_ * height_ + 7) / 8;
+  }
+  return width_ * height_ * get_pixel_size();
+}
+
+std::string SdImageComponent::get_format_string() const {
+  switch (format_) {
+    case ImageFormat::RGB565: return "RGB565";
+    case ImageFormat::RGB888: return "RGB888";
+    case ImageFormat::RGBA: return "RGBA";
+    case ImageFormat::GRAYSCALE: return "Grayscale";
+    case ImageFormat::BINARY: return "Binary";
+    default: return "Unknown";
+  }
+}
+
+bool SdImageComponent::validate_image_data() const {
+  if (!is_loaded_) return false;
+  
+  size_t expected_size = calculate_expected_size();
+  if (cache_enabled_) {
+    return image_data_.size() == expected_size;
   }
   
-  // Construire l'URL complète avec l'adresse IP de l'ESP32
-  return "http://192.168.1.41" + file->get_http_url();
-}
-
-void StorageComponent::setup_http_handlers() {
-  if (!web_server_) {
-    ESP_LOGE(TAG, "Web server not available");
-    return;
+  // Pour le mode streaming, vérifier que le fichier existe et a la bonne taille
+  std::vector<uint8_t> data;
+  if (storage_component_) {
+    data = storage_component_->read_file_direct(file_path_);
+  } else if (sd_component_) {
+    data = sd_component_->read_file(file_path_);
   }
   
-  ESP_LOGI(TAG, "Setting up HTTP handlers for SD card files");
-  
-  // Enregistrer automatiquement tous les fichiers comme ressources HTTP
-  for (auto *file : files_) {
-    std::string path = file->get_path();
-    std::string url_path = file->get_http_url();
-    register_http_resource(path, url_path);
-    
-    ESP_LOGD(TAG, "Auto-registered file %s as HTTP resource at %s", path.c_str(), url_path.c_str());
+  return data.size() == expected_size;
+}
+
+void SdImageComponent::free_cache() {
+  if (cache_enabled_) {
+    image_data_.clear();
+    image_data_.shrink_to_fit();
   }
-  
-  // Ici, nous devons ajouter les gestionnaires HTTP au serveur web
-  // Cette partie dépend de l'implémentation de votre web_server_base
-  // Pour l'instant, nous enregistrons juste les ressources
-  
-  ESP_LOGI(TAG, "HTTP handlers for SD card files registered");
 }
 
-void StorageComponent::register_http_resource(const std::string &path, const std::string &url_path) {
-  this->http_resources_[path] = url_path;
-  ESP_LOGD(TAG, "Registered HTTP resource: %s -> %s", path.c_str(), url_path.c_str());
-}
-
-// ===========================================
-// Hooks globaux pour bypass ESPHome
-// ===========================================
-
-std::vector<uint8_t> StorageGlobalHooks::intercept_file_read(const std::string &path) {
-  auto *storage = StorageComponent::get_global_instance();
-  if (!storage) return {};
-  
-  ESP_LOGD(TAG, "Intercepting file read: %s", path.c_str());
-  return storage->read_file_direct(path);
-}
-
-bool StorageGlobalHooks::intercept_file_exists(const std::string &path) {
-  auto *storage = StorageComponent::get_global_instance();
-  if (!storage) return false;
-  
-  return storage->file_exists_direct(path);
-}
-
-void StorageGlobalHooks::intercept_file_stream(const std::string &path, std::function<void(const uint8_t*, size_t)> callback) {
-  auto *storage = StorageComponent::get_global_instance();
-  if (!storage) return;
-  
-  storage->stream_file_direct(path, callback);
-}
-
-}  // namespace storage
+}  // namespace sd_image
 }  // namespace esphome
 
 
