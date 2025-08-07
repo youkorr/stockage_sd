@@ -8,7 +8,7 @@
 #include "esphome/core/optional.h"
 //#include "esphome/components/image/image.h"  // Ajout important
 #include "../sd_mmc_card/sd_mmc_card.h"
-#include "../image.h/image.h"
+#include "../image/image.h"
 
 namespace esphome {
 namespace storage {
