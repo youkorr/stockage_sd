@@ -17,7 +17,7 @@ CONF_CACHE_SIZE = "cache_size"
 
 # Constants pour les images SD
 CONF_SD_IMAGES = "sd_images"
-CONF_STORAGE_ID = "storage_id"
+
 CONF_FILE_PATH = "file_path"
 CONF_BYTE_ORDER = "byte_order"
 CONF_CACHE_ENABLED = "cache_enabled"
@@ -50,16 +50,15 @@ BYTE_ORDER = {
 # Schéma pour les images SD
 SD_IMAGE_SCHEMA = cv.Schema({
     cv.Required(CONF_ID): cv.declare_id(SdImageComponent),
-    cv.Required(CONF_STORAGE_ID): cv.use_id(StorageComponent),
     cv.Required(CONF_FILE_PATH): cv.string,
     cv.Required(CONF_WIDTH): cv.positive_int,
     cv.Required(CONF_HEIGHT): cv.positive_int,
-    # ↓ Supprime 'upper=True' pour les deux lignes suivantes ↓
-    cv.Required(CONF_FORMAT): cv.enum(IMAGE_FORMAT),  # Format en minuscules
-    cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER),  # Byte order en minuscules
+    cv.Required(CONF_FORMAT): cv.enum(IMAGE_FORMAT),
+    cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER),
     cv.Optional(CONF_CACHE_ENABLED, default=True): cv.boolean,
     cv.Optional(CONF_PRELOAD, default=False): cv.boolean,
 })
+
 
 CONFIG_SCHEMA = cv.All(
     cv.Schema({
@@ -105,10 +104,7 @@ async def to_code(config):
         # Ajouter les defines nécessaires pour les images
         if CONF_SD_IMAGES in config:
             cg.add_define("USE_SD_IMAGE")
-    
-    # Si c'est une configuration sd_image directe
-    elif CONF_STORAGE_ID in config:
-        await process_sd_image_config(config)
+
 
 async def process_sd_image_config(img_config):
     """Traite la configuration d'une image SD"""
@@ -116,7 +112,7 @@ async def process_sd_image_config(img_config):
     await cg.register_component(img_var, img_config)
     
     # Référence vers le composant storage
-    storage_component = await cg.get_variable(img_config[CONF_STORAGE_ID])
+    
     cg.add(img_var.set_storage_component(storage_component))
     
     # Configuration de base de l'image
