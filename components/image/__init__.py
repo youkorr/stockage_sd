@@ -13,10 +13,12 @@ import esphome.codegen as cg
 from esphome.components.const import CONF_BYTE_ORDER
 import esphome.config_validation as cv
 from esphome.const import (
+    CONF_DEFAULTS,
     CONF_DITHER,
     CONF_FILE,
     CONF_ICON,
     CONF_ID,
+    CONF_IMAGES,
     CONF_PATH,
     CONF_RAW_DATA_ID,
     CONF_RESIZE,
@@ -511,8 +513,51 @@ IMAGE_SCHEMA = cv.Schema(
     }
 ).add_extra(validate_settings)
 
-# Schéma de configuration principal - uniquement liste d'images
-CONFIG_SCHEMA = cv.ensure_list(IMAGE_SCHEMA)
+
+def process_defaults_images(config):
+    """Process defaults/images configuration"""
+    defaults = config.get(CONF_DEFAULTS, {})
+    images = config.get(CONF_IMAGES, [])
+    
+    result = []
+    for image_config in images:
+        # Créer une nouvelle configuration en combinant defaults et image_config
+        final_config = {}
+        
+        # Appliquer les defaults d'abord
+        for key, value in defaults.items():
+            final_config[key] = value
+            
+        # Puis appliquer la configuration spécifique de l'image
+        for key, value in image_config.items():
+            final_config[key] = value
+            
+        result.append(final_config)
+    
+    return result
+
+
+def _config_schema(config):
+    """Schéma de configuration flexible"""
+    if isinstance(config, list):
+        # Liste simple d'images
+        return cv.Schema([IMAGE_SCHEMA])(config)
+    elif isinstance(config, dict):
+        if CONF_DEFAULTS in config or CONF_IMAGES in config:
+            # Configuration avec defaults et images
+            validated = cv.Schema({
+                cv.Optional(CONF_DEFAULTS): dict,
+                cv.Required(CONF_IMAGES): [dict],
+            })(config)
+            return process_defaults_images(validated)
+        else:
+            # Image unique
+            return [IMAGE_SCHEMA(config)]
+    else:
+        raise cv.Invalid("Invalid image configuration")
+
+
+CONFIG_SCHEMA = _config_schema
 
 
 async def write_image(config, all_frames=False):
