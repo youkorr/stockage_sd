@@ -13,15 +13,15 @@ static const char *const TAG_IMAGE = "storage.sd_image";
 void StorageComponent::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Storage Component...");
   
-  if (!sd_component_) {
+  if (!this->sd_component_) {  // Ajout de 'this->'
     ESP_LOGE(TAG, "SD component not set!");
     this->mark_failed();
     return;
   }
   
-  ESP_LOGD(TAG, "Platform: %s", platform_.c_str());
-  if (cache_size_ > 0) {
-    ESP_LOGD(TAG, "Cache size: %zu bytes", cache_size_);
+  ESP_LOGD(TAG, "Platform: %s", this->platform_.c_str());
+  if (this->cache_size_ > 0) {
+    ESP_LOGD(TAG, "Cache size: %zu bytes", this->cache_size_);
   }
   
   ESP_LOGCONFIG(TAG, "Storage Component setup complete");
@@ -33,47 +33,46 @@ void StorageComponent::loop() {
 
 void StorageComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "Storage Component:");
-  ESP_LOGCONFIG(TAG, "  Platform: %s", platform_.c_str());
-  ESP_LOGCONFIG(TAG, "  Cache Size: %zu bytes", cache_size_);
-  ESP_LOGCONFIG(TAG, "  SD Component: %s", sd_component_ ? "Connected" : "Not Connected");
+  ESP_LOGCONFIG(TAG, "  Platform: %s", this->platform_.c_str());
+  ESP_LOGCONFIG(TAG, "  Cache Size: %zu bytes", this->cache_size_);
+  ESP_LOGCONFIG(TAG, "  SD Component: %s", this->sd_component_ ? "Connected" : "Not Connected");
 }
 
 bool StorageComponent::file_exists_direct(const std::string &path) {
-  if (!sd_component_) {
+  if (!this->sd_component_) {
     ESP_LOGE(TAG, "SD component not available");
     return false;
   }
   
-  return sd_component_->file_size(path) > 0;
+  return this->sd_component_->file_size(path) > 0;
 }
 
 std::vector<uint8_t> StorageComponent::read_file_direct(const std::string &path) {
-  if (!sd_component_) {
+  if (!this->sd_component_) {
     ESP_LOGE(TAG, "SD component not available");
     return {};
   }
   
-  return sd_component_->read_file(path);
+  return this->sd_component_->read_file(path);
 }
 
 bool StorageComponent::write_file_direct(const std::string &path, const std::vector<uint8_t> &data) {
-  if (!sd_component_) {
+  if (!this->sd_component_) {
     ESP_LOGE(TAG, "SD component not available");
     return false;
   }
   
-  // Correction : utiliser les bons paramètres pour write_file
-  sd_component_->write_file(path.c_str(), data.data(), data.size());
+  this->sd_component_->write_file(path.c_str(), data.data(), data.size());
   return true;
 }
 
 size_t StorageComponent::get_file_size(const std::string &path) {
-  if (!sd_component_) {
+  if (!this->sd_component_) {
     ESP_LOGE(TAG, "SD component not available");
     return 0;
   }
   
-  return sd_component_->file_size(path);
+  return this->sd_component_->file_size(path);
 }
 
 // ======== SdImageComponent Implementation ========
@@ -81,35 +80,37 @@ size_t StorageComponent::get_file_size(const std::string &path) {
 void SdImageComponent::setup() {
   ESP_LOGCONFIG(TAG_IMAGE, "Setting up SD Image Component...");
   
-  if (!storage_component_) {
+  if (!this->storage_component_) {
     ESP_LOGE(TAG_IMAGE, "Storage component not set!");
     this->mark_failed();
     return;
   }
   
-  if (!validate_dimensions()) {
-    ESP_LOGE(TAG_IMAGE, "Invalid image dimensions: %dx%d", width_, height_);
+  if (!this->validate_dimensions()) {
+    ESP_LOGE(TAG_IMAGE, "Invalid image dimensions: %dx%d", this->width_, this->height_);
     this->mark_failed();
     return;
   }
   
-  if (!validate_file_path()) {
-    ESP_LOGE(TAG_IMAGE, "Invalid file path: %s", file_path_.c_str());
+  if (!this->validate_file_path()) {
+    ESP_LOGE(TAG_IMAGE, "Invalid file path: %s", this->file_path_.c_str());
     this->mark_failed();
     return;
   }
+  
+  // Calculer la taille attendue
+  this->expected_data_size_ = this->calculate_expected_size();
   
   // Vérifier si le fichier existe sur la SD
-  if (!storage_component_->file_exists_direct(file_path_)) {
-    ESP_LOGW(TAG_IMAGE, "Image file does not exist: %s", file_path_.c_str());
-    // Ne pas marquer comme failed, le fichier pourrait être ajouté plus tard
+  if (!this->storage_component_->file_exists_direct(this->file_path_)) {
+    ESP_LOGW(TAG_IMAGE, "Image file does not exist: %s", this->file_path_.c_str());
   } else {
-    ESP_LOGI(TAG_IMAGE, "Image file found: %s", file_path_.c_str());
+    ESP_LOGI(TAG_IMAGE, "Image file found: %s", this->file_path_.c_str());
   }
   
   // Précharger l'image si demandé
-  if (preload_) {
-    if (load_image()) {
+  if (this->preload_) {
+    if (this->load_image()) {
       ESP_LOGI(TAG_IMAGE, "Image preloaded successfully");
     } else {
       ESP_LOGW(TAG_IMAGE, "Failed to preload image");
@@ -121,18 +122,18 @@ void SdImageComponent::setup() {
 
 void SdImageComponent::dump_config() {
   ESP_LOGCONFIG(TAG_IMAGE, "SD Image:");
-  ESP_LOGCONFIG(TAG_IMAGE, "  File Path: %s", file_path_.c_str());
-  ESP_LOGCONFIG(TAG_IMAGE, "  Dimensions: %dx%d", width_, height_);
-  ESP_LOGCONFIG(TAG_IMAGE, "  Format: %s", get_format_string().c_str());
+  ESP_LOGCONFIG(TAG_IMAGE, "  File Path: %s", this->file_path_.c_str());
+  ESP_LOGCONFIG(TAG_IMAGE, "  Dimensions: %dx%d", this->width_, this->height_);
+  ESP_LOGCONFIG(TAG_IMAGE, "  Format: %s", this->get_format_string().c_str());
   ESP_LOGCONFIG(TAG_IMAGE, "  Byte Order: %s", 
-                byte_order_ == ByteOrder::little_endian ? "Little Endian" : "Big Endian");
-  ESP_LOGCONFIG(TAG_IMAGE, "  Expected Size: %zu bytes", expected_data_size_);
-  ESP_LOGCONFIG(TAG_IMAGE, "  Cache Enabled: %s", cache_enabled_ ? "YES" : "NO");
-  ESP_LOGCONFIG(TAG_IMAGE, "  Preload: %s", preload_ ? "YES" : "NO");
-  ESP_LOGCONFIG(TAG_IMAGE, "  Currently Loaded: %s", is_loaded_ ? "YES" : "NO");
+                this->byte_order_ == ByteOrder::little_endian ? "Little Endian" : "Big Endian");
+  ESP_LOGCONFIG(TAG_IMAGE, "  Expected Size: %zu bytes", this->expected_data_size_);
+  ESP_LOGCONFIG(TAG_IMAGE, "  Cache Enabled: %s", this->cache_enabled_ ? "YES" : "NO");
+  ESP_LOGCONFIG(TAG_IMAGE, "  Preload: %s", this->preload_ ? "YES" : "NO");
+  ESP_LOGCONFIG(TAG_IMAGE, "  Currently Loaded: %s", this->is_loaded_ ? "YES" : "NO");
   
-  if (is_loaded_) {
-    ESP_LOGCONFIG(TAG_IMAGE, "  Memory Usage: %zu bytes", get_memory_usage());
+  if (this->is_loaded_) {
+    ESP_LOGCONFIG(TAG_IMAGE, "  Memory Usage: %zu bytes", this->get_memory_usage());
   }
 }
 
