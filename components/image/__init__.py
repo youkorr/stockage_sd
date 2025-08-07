@@ -35,7 +35,7 @@ DEPENDENCIES = ["display"]
 image_ns = cg.esphome_ns.namespace("image")
 
 ImageType = image_ns.enum("ImageType")
-TransparencyType = image_ns.enum("TransparencyType")  # Correction du nom
+TransparencyType = image_ns.enum("TransparencyType")
 
 CONF_OPAQUE = "opaque"
 CONF_CHROMA_KEY = "chroma_key"
@@ -513,12 +513,13 @@ OPTIONS_SCHEMA = {
     cv.Optional(CONF_TYPE): validate_type(IMAGE_TYPE),
 }
 
-OPTIONS = [key.schema for key in OPTIONS_SCHEMA]
+# Correction de la définition de OPTIONS
+OPTIONS = [CONF_RESIZE, CONF_DITHER, CONF_INVERT_ALPHA, CONF_BYTE_ORDER, CONF_TRANSPARENCY, CONF_TYPE]
 
 # image schema with no defaults, used with `CONF_IMAGES` in the config
 IMAGE_SCHEMA_NO_DEFAULTS = {
     **IMAGE_ID_SCHEMA,
-    **{cv.Optional(key): OPTIONS_SCHEMA[key] for key in OPTIONS},
+    **{cv.Optional(key): OPTIONS_SCHEMA[cv.Optional(key)] for key in OPTIONS if cv.Optional(key) in OPTIONS_SCHEMA},
 }
 
 BASE_SCHEMA = cv.Schema(
@@ -542,15 +543,16 @@ def validate_defaults(value):
     defaults = value[CONF_DEFAULTS]
     result = []
     for index, image in enumerate(value[CONF_IMAGES]):
-        type = image.get(CONF_TYPE, defaults.get(CONF_TYPE))
-        if type is None:
+        type_val = image.get(CONF_TYPE, defaults.get(CONF_TYPE))
+        if type_val is None:
             raise cv.Invalid(
                 "Type is required either in the image config or in the defaults",
                 path=[CONF_IMAGES, index],
             )
-        type_class = IMAGE_TYPE[type]
+        type_class = IMAGE_TYPE[type_val]
+        
         # A default byte order should be simply ignored if the type does not support it
-        available_options = [*OPTIONS]
+        available_options = list(OPTIONS)
         if (
             not callable(getattr(type_class, "set_big_endian", None))
             and CONF_BYTE_ORDER not in image
@@ -559,13 +561,29 @@ def validate_defaults(value):
         
         # Créer un nouveau dictionnaire au lieu de modifier l'existant
         config = {}
+        
+        # Copier les clés d'identification d'abord
+        for key_schema in IMAGE_ID_SCHEMA:
+            if key_schema in image:
+                config[key_schema] = image[key_schema]
+        
         # Copier les options avec les valeurs par défaut
         for key in available_options:
-            config[key] = image.get(key, defaults.get(key))
-        # Copier les clés d'identification
-        for key in IMAGE_ID_SCHEMA:
-            if key.schema in image:
-                config[key.schema] = image[key.schema]
+            if key in image:
+                config[key] = image[key]
+            elif key in defaults:
+                config[key] = defaults[key]
+            else:
+                # Utiliser les valeurs par défaut définies dans OPTIONS_SCHEMA
+                if key == CONF_DITHER:
+                    config[key] = "NONE"
+                elif key == CONF_INVERT_ALPHA:
+                    config[key] = False
+                elif key == CONF_TRANSPARENCY:
+                    config[key] = CONF_OPAQUE
+        
+        # S'assurer que le type est défini
+        config[CONF_TYPE] = type_val
         
         validate_settings(config)
         result.append(config)
@@ -628,8 +646,8 @@ def _config_schema(config):
         return validate_defaults(
             cv.Schema(
                 {
-                    cv.Required(CONF_DEFAULTS): OPTIONS_SCHEMA,
-                    cv.Required(CONF_IMAGES): cv.ensure_list(IMAGE_SCHEMA_NO_DEFAULTS),
+                    cv.Required(CONF_DEFAULTS): cv.Schema(OPTIONS_SCHEMA),
+                    cv.Required(CONF_IMAGES): cv.ensure_list(cv.Schema(IMAGE_SCHEMA_NO_DEFAULTS)),
                 }
             )(config)
         )
