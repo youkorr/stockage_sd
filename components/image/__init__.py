@@ -312,6 +312,7 @@ MDI_SOURCES = {
 }
 
 Image_ = image_ns.class_("Image")
+SDCardImage_ = image_ns.class_("SDCardImage", Image_)
 
 INSTANCE_TYPE = Image_
 
@@ -419,7 +420,6 @@ WEB_SCHEMA = cv.All(
 )
 
 
-
 SD_CARD_SCHEMA = cv.All(
     {
         cv.Required(CONF_PATH): cv.string,
@@ -458,6 +458,10 @@ def validate_settings(value):
     """
     Validate the settings for a single image configuration.
     """
+    # Skip validation for SD card images as they are processed at runtime
+    if value.get(CONF_SOURCE) == SOURCE_SD_CARD:
+        return value
+        
     conf_type = value[CONF_TYPE]
     type_class = IMAGE_TYPE[conf_type]
     transparency = value[CONF_TRANSPARENCY].lower()
@@ -630,12 +634,15 @@ def _config_schema(config):
     )(config)
 
 
-CONFIG_SCHEMA = _config_schema
+CONFIG_SCHEMA = cv.All(
+    _config_schema,
+    cv.has_at_least_one_key("sd_mmc_card"),  # Ensure sd_mmc_card is available when needed
+)
 
 
 async def write_image(config, all_frames=False):
     # Cas spécial : source = sd_card → image lue à l'exécution, pas à la compilation
-    if config.get(CONF_SOURCE) == "sd_card":
+    if config.get(CONF_SOURCE) == SOURCE_SD_CARD:
         _LOGGER.info(f"Skipping compile-time processing for SD card image: {config[CONF_FILE]}")
         return None, None, None, None, None, None
 
@@ -713,7 +720,6 @@ async def write_image(config, all_frames=False):
     return prog_arr, width, height, image_type, trans_value, frame_count
 
 
-
 async def to_code(config):
     if isinstance(config, list):
         for entry in config:
@@ -722,7 +728,31 @@ async def to_code(config):
         for entry in config.values():
             await to_code(entry)
     else:
-        prog_arr, width, height, image_type, trans_value, _ = await write_image(config)
-        cg.new_Pvariable(
-            config[CONF_ID], prog_arr, width, height, image_type, trans_value
-        )
+        # Vérifier si c'est une image SD card
+        if config.get(CONF_SOURCE) == SOURCE_SD_CARD:
+            # Ajouter la dépendance au composant sd_mmc_card
+            cg.add_define("USE_SD_MMC_CARD")
+            
+            # Créer une instance SDCardImage
+            var = cg.new_Pvariable(
+                config[CONF_ID],
+                config[CONF_FILE],  # chemin sur la SD
+                get_image_type_enum(config[CONF_TYPE]),
+                get_transparency_enum(config[CONF_TRANSPARENCY])
+            )
+            
+            # Configurer les options si présentes
+            if CONF_RESIZE in config:
+                cg.add(var.set_resize(config[CONF_RESIZE][0], config[CONF_RESIZE][1]))
+            if config.get(CONF_DITHER) == "FLOYDSTEINBERG":
+                cg.add(var.set_dither(True))
+            if config.get(CONF_INVERT_ALPHA, False):
+                cg.add(var.set_invert_alpha(True))
+            if byte_order := config.get(CONF_BYTE_ORDER):
+                cg.add(var.set_big_endian(byte_order == "BIG_ENDIAN"))
+        else:
+            # Image normale (locale, web, mdi, etc.)
+            prog_arr, width, height, image_type, trans_value, _ = await write_image(config)
+            cg.new_Pvariable(
+                config[CONF_ID], prog_arr, width, height, image_type, trans_value
+            )
