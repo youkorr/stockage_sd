@@ -2,8 +2,9 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_PLATFORM, CONF_WIDTH, CONF_HEIGHT, CONF_FORMAT
 from esphome import automation
+from esphome.components import image
 
-DEPENDENCIES = ['sd_mmc_card']
+DEPENDENCIES = ['sd_mmc_card', 'image']
 CODEOWNERS = ["@youkorr"]
 
 # Configuration constants
@@ -25,7 +26,8 @@ CONF_PRELOAD = "preload"
 
 storage_ns = cg.esphome_ns.namespace('storage')
 StorageComponent = storage_ns.class_('StorageComponent', cg.Component)
-SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component)
+# IMPORTANT: Utiliser le bon héritage pour image::Image
+SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, image.Image_)
 
 SdImageLoadAction = storage_ns.class_('SdImageLoadAction', automation.Action)
 SdImageUnloadAction = storage_ns.class_('SdImageUnloadAction', automation.Action)
@@ -54,7 +56,7 @@ SD_IMAGE_SCHEMA = cv.Schema({
     cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER, lower=True),
     cv.Optional(CONF_CACHE_ENABLED, default=True): cv.boolean,
     cv.Optional(CONF_PRELOAD, default=False): cv.boolean,
-}).extend(cv.COMPONENT_SCHEMA)
+}).extend(cv.COMPONENT_SCHEMA).extend(image.IMAGE_SCHEMA)
 
 CONFIG_SCHEMA = cv.Schema({
     cv.Required(CONF_PLATFORM): cv.one_of("sd_direct", lower=True),
@@ -105,7 +107,7 @@ async def to_code(config):
         cg.add_define("USE_SD_IMAGE")
 
 async def process_sd_image_config(img_config, storage_component):
-    # Création du composant image
+    # IMPORTANT: Création ET enregistrement du composant image
     img_var = cg.new_Pvariable(img_config[CONF_ID])
     await cg.register_component(img_var, img_config)
 
@@ -143,6 +145,9 @@ async def process_sd_image_config(img_config, storage_component):
         data_size = img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] * format_sizes[format_key]
 
     cg.add(img_var.set_expected_data_size(data_size))
+    
+    # CRUCIAL: Retourner la variable pour que ESPHome puisse la suivre
+    return img_var
 
 @automation.register_action(
     "sd_image.load",
