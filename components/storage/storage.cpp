@@ -123,7 +123,7 @@ void SdImageComponent::dump_config() {
   ESP_LOGCONFIG(TAG_IMAGE, "  Dimensions: %dx%d", width_, height_);
   ESP_LOGCONFIG(TAG_IMAGE, "  Format: %s", get_format_string().c_str());
   ESP_LOGCONFIG(TAG_IMAGE, "  Byte Order: %s", 
-                byte_order_ == ByteOrder::LITTLE_ENDIAN ? "Little Endian" : "Big Endian");
+                byte_order_ == ByteOrder::Little Endian ? "Little Endian" : "Big Endian");
   ESP_LOGCONFIG(TAG_IMAGE, "  Expected Size: %zu bytes", expected_data_size_);
   ESP_LOGCONFIG(TAG_IMAGE, "  Cache Enabled: %s", cache_enabled_ ? "YES" : "NO");
   ESP_LOGCONFIG(TAG_IMAGE, "  Preload: %s", preload_ ? "YES" : "NO");
@@ -144,8 +144,8 @@ void SdImageComponent::set_format_string(const std::string &format) {
 }
 
 void SdImageComponent::set_byte_order_string(const std::string &byte_order) {
-  if (byte_order == "BIG_ENDIAN") byte_order_ = ByteOrder::BIG_ENDIAN;
-  else byte_order_ = ByteOrder::LITTLE_ENDIAN; // default
+  if (byte_order == "big_endian") byte_order_ = ByteOrder::big_endian;
+  else byte_order_ = ByteOrder::little_endian; // default
 }
 
 bool SdImageComponent::load_image() {
@@ -187,7 +187,7 @@ bool SdImageComponent::load_image_from_path(const std::string &path) {
   }
   
   // Conversion de l'ordre des bytes si nécessaire
-  if (byte_order_ == ByteOrder::BIG_ENDIAN && get_pixel_size() > 1) {
+  if (byte_order_ == ByteOrder::big_endian && get_pixel_size() > 1) {
     convert_byte_order(data);
   }
   
