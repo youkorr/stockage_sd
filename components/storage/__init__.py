@@ -35,16 +35,16 @@ SdImageUnloadAction = storage_ns.class_('SdImageUnloadAction', automation.Action
 
 # Formats d'image supportés
 IMAGE_FORMAT = {
-    "rgb565": "RGB565",
-    "rgb888": "RGB888", 
-    "rgba": "RGBA",
-    "grayscale": "GRAYSCALE",
-    "binary": "BINARY",
+    "rgb565": "rgb565",
+    "rgb888": "rgb888", 
+    "rgba": "rgba",
+    "grayscale": "graycale",
+    "binary": "binary",
 }
 
 BYTE_ORDER = {
-    "little_endian": "LITTLE_ENDIAN",
-    "big_endian": "BIG_ENDIAN",
+    "little_endian": "little_endian",
+    "big_endian": "big_endian",
 }
 
 # Schéma pour les images SD
@@ -54,8 +54,9 @@ SD_IMAGE_SCHEMA = cv.Schema({
     cv.Required(CONF_FILE_PATH): cv.string,
     cv.Required(CONF_WIDTH): cv.positive_int,
     cv.Required(CONF_HEIGHT): cv.positive_int,
-    cv.Required(CONF_FORMAT): cv.enum(IMAGE_FORMAT, upper=True),
-    cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER, upper=True),
+    # ↓ Supprime 'upper=True' pour les deux lignes suivantes ↓
+    cv.Required(CONF_FORMAT): cv.enum(IMAGE_FORMAT),  # Format en minuscules
+    cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER),  # Byte order en minuscules
     cv.Optional(CONF_CACHE_ENABLED, default=True): cv.boolean,
     cv.Optional(CONF_PRELOAD, default=False): cv.boolean,
 })
