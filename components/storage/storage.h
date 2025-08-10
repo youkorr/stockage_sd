@@ -3,6 +3,8 @@
 #include <vector>
 #include <memory>
 #include <functional>
+#include <cstring>
+#include <cstdint>
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/optional.h"
@@ -78,7 +80,7 @@ class SdImageComponent : public Component, public display::BaseImage {
   // Configuration de base
   void set_file_path(const std::string &path) { this->file_path_ = path; }
   void set_width(int width) { 
-    this->width_ = width; 
+    this->width_ = width;
     this->width_override_ = width;
   }
   void set_height(int height) { 
@@ -110,7 +112,9 @@ class SdImageComponent : public Component, public display::BaseImage {
   void draw(int x, int y, display::Display *display, Color color_on, Color color_off) override;
   
   // Accès aux données image
-  const uint8_t *get_data_start() const { return this->image_data_.data(); }
+  const uint8_t *get_data_start() const { 
+    return this->image_data_.empty() ? nullptr : this->image_data_.data(); 
+  }
   ImageType get_image_type() const;
   
   // Chargement/déchargement d'image
@@ -119,10 +123,12 @@ class SdImageComponent : public Component, public display::BaseImage {
   void unload_image();
   bool reload_image();
   
-  // Accès aux pixels
+  // Accès aux pixels avec vérifications de sécurité
   void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const;
   void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const; 
-  const uint8_t *get_data() const { return this->image_data_.data(); }
+  const uint8_t *get_data() const { 
+    return this->image_data_.empty() ? nullptr : this->image_data_.data(); 
+  }
   size_t get_data_size() const { return this->image_data_.size(); }
   
   // Méthodes utilitaires
@@ -148,6 +154,25 @@ class SdImageComponent : public Component, public display::BaseImage {
   
   const uint8_t* get_image_data() const { return this->get_data(); }
 
+  // Méthodes utilitaires pour le diagnostic
+  bool has_valid_dimensions() const { 
+    return this->width_ > 0 && this->height_ > 0; 
+  }
+  
+  std::string get_debug_info() const {
+    char buffer[256];
+    snprintf(buffer, sizeof(buffer), 
+      "SdImage[%s]: %dx%d, %s, %s, loaded=%s, size=%zu bytes",
+      this->file_path_.c_str(),
+      this->width_, this->height_,
+      this->get_format_string().c_str(),
+      this->is_loaded_ ? "loaded" : "not loaded",
+      this->is_loaded_ ? "yes" : "no",
+      this->image_data_.size()
+    );
+    return std::string(buffer);
+  }
+
  private:
   // Configuration
   std::string file_path_;
@@ -165,18 +190,25 @@ class SdImageComponent : public Component, public display::BaseImage {
   std::vector<uint8_t> image_data_;
   StorageComponent *storage_component_{nullptr};
   
-  // Variables override largeur/hauteur
+  // Variables override largeur/hauteur (pour raw images)
   int width_override_{0};
   int height_override_{0};
   
   // Méthodes de décodage d'images
-  bool is_jpeg_file(const std::vector<uint8_t> &data);
-  bool is_png_file(const std::vector<uint8_t> &data);
+  bool is_jpeg_file(const std::vector<uint8_t> &data) const;
+  bool is_png_file(const std::vector<uint8_t> &data) const;
+  bool is_bmp_file(const std::vector<uint8_t> &data) const;
   bool decode_jpeg(const std::vector<uint8_t> &jpeg_data);
   bool decode_png(const std::vector<uint8_t> &png_data);
+  bool decode_bmp(const std::vector<uint8_t> &bmp_data);
   bool load_raw_data(const std::vector<uint8_t> &raw_data);
   
-  // Méthodes privées
+  // Méthodes privées pour l'extraction de métadonnées
+  bool extract_jpeg_dimensions(const std::vector<uint8_t> &data, int &width, int &height) const;
+  bool extract_png_dimensions(const std::vector<uint8_t> &data, int &width, int &height) const;
+  bool extract_bmp_dimensions(const std::vector<uint8_t> &data, int &width, int &height) const;
+  
+  // Méthodes de conversion et validation
   bool read_image_from_storage();
   void convert_byte_order(std::vector<uint8_t> &data);
   void convert_pixel_format(int x, int y, const uint8_t *pixel_data, 
@@ -186,10 +218,16 @@ class SdImageComponent : public Component, public display::BaseImage {
   
   bool validate_dimensions() const;
   bool validate_file_path() const;
+  bool validate_pixel_access(int x, int y) const;
+  
+  // Méthodes utilitaires
+  std::string detect_file_type(const std::string &path) const;
+  bool is_supported_format(const std::string &extension) const;
 };
 
-// Actions pour l'automatisation
-template<typename... Ts> class SdImageLoadAction : public Action<Ts...> {
+// Actions pour l'automatisation avec gestion d'erreurs améliorée
+template<typename... Ts> 
+class SdImageLoadAction : public Action<Ts...> {
  public:
   SdImageLoadAction() = default;
   explicit SdImageLoadAction(SdImageComponent *parent) : parent_(parent) {}
@@ -199,22 +237,40 @@ template<typename... Ts> class SdImageLoadAction : public Action<Ts...> {
   void set_parent(SdImageComponent *parent) { this->parent_ = parent; }
   
   void play(Ts... x) override {
-    if (this->parent_ == nullptr) return;
-    if (this->file_path_.has_value()) {
-      std::string path = this->file_path_.value(x...);
-      if (!path.empty()) {
-        this->parent_->load_image_from_path(path);
-        return;
-      }
+    if (this->parent_ == nullptr) {
+      ESP_LOGE("sd_image.load", "Parent component is null");
+      return;
     }
-    this->parent_->load_image();
+    
+    try {
+      if (this->file_path_.has_value()) {
+        std::string path = this->file_path_.value(x...);
+        if (!path.empty()) {
+          ESP_LOGD("sd_image.load", "Loading image from path: %s", path.c_str());
+          if (!this->parent_->load_image_from_path(path)) {
+            ESP_LOGE("sd_image.load", "Failed to load image from: %s", path.c_str());
+          }
+          return;
+        }
+      }
+      
+      ESP_LOGD("sd_image.load", "Loading image from configured path");
+      if (!this->parent_->load_image()) {
+        ESP_LOGE("sd_image.load", "Failed to load image from configured path");
+      }
+    } catch (const std::exception& e) {
+      ESP_LOGE("sd_image.load", "Exception during image loading: %s", e.what());
+    } catch (...) {
+      ESP_LOGE("sd_image.load", "Unknown exception during image loading");
+    }
   }
 
  private:
   SdImageComponent *parent_{nullptr};
 };
 
-template<typename... Ts> class SdImageUnloadAction : public Action<Ts...> {
+template<typename... Ts> 
+class SdImageUnloadAction : public Action<Ts...> {
  public:
   SdImageUnloadAction() = default;
   explicit SdImageUnloadAction(SdImageComponent *parent) : parent_(parent) {}
@@ -222,13 +278,75 @@ template<typename... Ts> class SdImageUnloadAction : public Action<Ts...> {
   void set_parent(SdImageComponent *parent) { this->parent_ = parent; }
   
   void play(Ts... x) override {
-    if (this->parent_ != nullptr) {
+    if (this->parent_ == nullptr) {
+      ESP_LOGE("sd_image.unload", "Parent component is null");
+      return;
+    }
+    
+    try {
+      ESP_LOGD("sd_image.unload", "Unloading image: %s", this->parent_->get_debug_info().c_str());
       this->parent_->unload_image();
+      ESP_LOGD("sd_image.unload", "Image unloaded successfully");
+    } catch (const std::exception& e) {
+      ESP_LOGE("sd_image.unload", "Exception during image unloading: %s", e.what());
+    } catch (...) {
+      ESP_LOGE("sd_image.unload", "Unknown exception during image unloading");
     }
   }
 
  private:
   SdImageComponent *parent_{nullptr};
+};
+
+// Classe utilitaire pour gérer la mémoire d'images
+class ImageMemoryManager {
+ public:
+  static ImageMemoryManager& getInstance() {
+    static ImageMemoryManager instance;
+    return instance;
+  }
+  
+  void register_image(SdImageComponent* image) {
+    if (image) {
+      registered_images_.push_back(image);
+    }
+  }
+  
+  void unregister_image(SdImageComponent* image) {
+    auto it = std::find(registered_images_.begin(), registered_images_.end(), image);
+    if (it != registered_images_.end()) {
+      registered_images_.erase(it);
+    }
+  }
+  
+  size_t get_total_memory_usage() const {
+    size_t total = 0;
+    for (auto* img : registered_images_) {
+      if (img && img->is_loaded()) {
+        total += img->get_memory_usage();
+      }
+    }
+    return total;
+  }
+  
+  void free_memory_if_needed(size_t required_bytes) {
+    size_t free_heap = ESP.getFreeHeap();
+    if (free_heap < required_bytes + 50000) { // 50KB safety margin
+      ESP_LOGW("memory", "Low memory, freeing image caches");
+      for (auto* img : registered_images_) {
+        if (img && img->is_loaded() && img->is_cache_enabled()) {
+          img->free_cache();
+          if (ESP.getFreeHeap() >= required_bytes + 50000) {
+            break;
+          }
+        }
+      }
+    }
+  }
+  
+ private:
+  ImageMemoryManager() = default;
+  std::vector<SdImageComponent*> registered_images_;
 };
 
 }  // namespace storage
