@@ -580,4 +580,3 @@ void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &g
 
 
 
-
