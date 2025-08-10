@@ -53,7 +53,7 @@ SD_IMAGE_SCHEMA = cv.Schema({
     cv.Optional(CONF_WIDTH, default=0): cv.positive_int,
     cv.Optional(CONF_HEIGHT, default=0): cv.positive_int,
     # Format optionnel pour JPEG/PNG (sera déterminé automatiquement)
-    cv.Optional(CONF_FORMAT, default="rgb888"): cv.enum(IMAGE_FORMAT, lower=True),
+    cv.Optional(CONF_FORMAT, default="rgb565"): cv.enum(IMAGE_FORMAT, lower=True),
     cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER, lower=True),
     cv.Optional(CONF_CACHE_ENABLED, default=True): cv.boolean,
     cv.Optional(CONF_PRELOAD, default=False): cv.boolean,
