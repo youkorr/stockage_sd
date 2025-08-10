@@ -6,9 +6,8 @@
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/optional.h"
-//#include "esphome/components/image/image.h"  // Ajout important
+#include "esphome/components/image/image.h"  // Image ESPHome
 #include "../sd_mmc_card/sd_mmc_card.h"
-#include "esphome/components/image/image.h"
 
 namespace esphome {
 namespace storage {
@@ -24,7 +23,7 @@ enum class ImageFormat {
   rgb565,
   rgb888,
   rgba,
-  grayscale,  // Fixed: was "graycale"
+  grayscale,
   binary
 };
 
@@ -65,12 +64,11 @@ class StorageComponent : public Component {
   size_t cache_size_{0};
 };
 
-// Classe pour les images SD - HÉRITE MAINTENANT DE image::Image
+// Classe pour les images SD - HÉRITE DE display::BaseImage (Image ESPHome)
 class SdImageComponent : public Component, public display::BaseImage {
  public:
   SdImageComponent() = default;
 
-  
   void setup() override;
   void loop() override {}
   void dump_config() override;
@@ -80,12 +78,10 @@ class SdImageComponent : public Component, public display::BaseImage {
   void set_file_path(const std::string &path) { this->file_path_ = path; }
   void set_width(int width) { 
     this->width_ = width; 
-    // Mettre à jour aussi la classe parent Image
     this->width_override_ = width;
   }
   void set_height(int height) { 
     this->height_ = height; 
-    // Mettre à jour aussi la classe parent Image
     this->height_override_ = height;
   }
   void set_format(ImageFormat format) { this->format_ = format; }
@@ -101,32 +97,28 @@ class SdImageComponent : public Component, public display::BaseImage {
   
   // Getters
   const std::string &get_file_path() const { return this->file_path_; }
-  int get_width() const override { return this->width_; }  // Override de Image
-  int get_height() const override { return this->height_; } // Override de Image
+  int get_width() const override { return this->width_; }
+  int get_height() const override { return this->height_; }
   ImageFormat get_format() const { return this->format_; }
   ByteOrder get_byte_order() const { return this->byte_order_; }
   bool is_loaded() const { return this->is_loaded_; }
   bool is_cache_enabled() const { return this->cache_enabled_; }
   size_t get_expected_data_size() const { return this->expected_data_size_; }
   
-  // Méthodes héritées de image::Image - OBLIGATOIRES
+  // Méthodes héritées de display::BaseImage
   void draw(int x, int y, display::Display *display, Color color_on, Color color_off) override;
   
-  // REMOVED: These methods don't exist in the base Image class or have different signatures
-  // const uint8_t *get_data_start() const override { return this->image_data_.data(); }
-  // ImageType get_type() const override;
-  
-  // Alternative methods for accessing image data
+  // Accès aux données image
   const uint8_t *get_data_start() const { return this->image_data_.data(); }
-  ImageType get_image_type() const;  // Renamed to avoid override conflict
+  ImageType get_image_type() const;
   
-  // Méthodes principales
+  // Chargement/déchargement d'image
   bool load_image();
   bool load_image_from_path(const std::string &path);
   void unload_image();
   bool reload_image();
   
-  // Méthodes d'accès aux pixels
+  // Accès aux pixels (exemples)
   void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const;
   void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const; 
   const uint8_t *get_data() const { return this->image_data_.data(); }
@@ -141,13 +133,13 @@ class SdImageComponent : public Component, public display::BaseImage {
   void free_cache();
   size_t get_memory_usage() const { return this->image_data_.size(); }
   
-  // Méthodes pour streaming (images très grandes)
+  // Streaming (pour images très grandes)
   void get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const;
   void get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const;
   bool is_streaming_mode() const { return this->streaming_mode_; }
   void set_streaming_mode(bool enabled) { this->streaming_mode_ = enabled; }
   
-  // Méthodes de compatibilité pour les displays
+  // Compatibilité affichage
   void get_image_dimensions(int *width, int *height) const {
     if (width) *width = this->width_;
     if (height) *height = this->height_;
@@ -172,11 +164,11 @@ class SdImageComponent : public Component, public display::BaseImage {
   std::vector<uint8_t> image_data_;
   StorageComponent *storage_component_{nullptr};
   
-  // Variables pour la compatibilité avec Image
+  // Variables override largeur/hauteur
   int width_override_{0};
   int height_override_{0};
   
-  // Méthodes privées
+  // Méthodes privées (à implémenter dans le .cpp)
   bool read_image_from_storage();
   void convert_byte_order(std::vector<uint8_t> &data);
   void convert_pixel_format(int x, int y, const uint8_t *pixel_data, 
@@ -184,12 +176,11 @@ class SdImageComponent : public Component, public display::BaseImage {
   size_t get_pixel_size() const;
   size_t get_pixel_offset(int x, int y) const;
   
-  // Validation
   bool validate_dimensions() const;
   bool validate_file_path() const;
 };
 
-// Classes pour les actions d'automatisation
+// Actions pour l'automatisation
 template<typename... Ts> class SdImageLoadAction : public Action<Ts...> {
  public:
   SdImageLoadAction() = default;
@@ -201,7 +192,6 @@ template<typename... Ts> class SdImageLoadAction : public Action<Ts...> {
   
   void play(Ts... x) override {
     if (this->parent_ == nullptr) return;
-    
     if (this->file_path_.has_value()) {
       std::string path = this->file_path_.value(x...);
       if (!path.empty()) {
@@ -233,8 +223,32 @@ template<typename... Ts> class SdImageUnloadAction : public Action<Ts...> {
   SdImageComponent *parent_{nullptr};
 };
 
+// ---------- Implémentation de load_image_from_path (dans storage.cpp) ----------
+inline bool SdImageComponent::load_image_from_path(const std::string &path) {
+  ESP_LOGD("SdImageComponent", "Loading image from: %s", path.c_str());
+
+  image::Image decoded_img;
+  if (!decoded_img.load_file(path.c_str())) {
+    ESP_LOGE("SdImageComponent", "Failed to load image: %s", path.c_str());
+    return false;
+  }
+
+  this->width_ = decoded_img.get_width();
+  this->height_ = decoded_img.get_height();
+
+  // Copie les données RGB (ou autres formats)
+  const auto &data = decoded_img.get_data();
+  this->image_data_.assign(data.begin(), data.end());
+
+  this->is_loaded_ = true;
+  ESP_LOGI("SdImageComponent", "Image loaded %dx%d (%zu bytes)", this->width_, this->height_, this->image_data_.size());
+
+  return true;
+}
+
 }  // namespace storage
 }  // namespace esphome
+
 
 
 
