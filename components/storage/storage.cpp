@@ -245,18 +245,18 @@ void SdImageComponent::draw(int x, int y, display::Display *display, Color color
     ESP_LOGW(TAG_IMAGE, "Cannot draw: image not loaded");
     return;
   }
-  
-  // Dessiner pixel par pixel
+
   for (int img_y = 0; img_y < this->height_; img_y++) {
     for (int img_x = 0; img_x < this->width_; img_x++) {
       uint8_t red, green, blue, alpha;
       this->get_pixel(img_x, img_y, red, green, blue, alpha);
-      
-      // Convertir en couleur ESPHome
-      Color pixel_color = Color(red, green, blue);
-      
-      // Dessiner le pixel sur le display
-      display->draw_pixel_at(x + img_x, y + img_y, pixel_color);
+
+      // Si alpha == 0, pixel transparent, on saute
+      if (alpha == 0)
+        continue;
+
+      Color pixel_color(red, green, blue);
+      display->draw_absolute_pixel(x + img_x, y + img_y, pixel_color);
     }
   }
 }
