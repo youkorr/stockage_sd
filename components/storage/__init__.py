@@ -10,19 +10,13 @@ CODEOWNERS = ["@youkorr"]
 # Configuration constants
 CONF_STORAGE = "storage"
 CONF_PATH = "path"
-CONF_CHUNK_SIZE = "chunk_size"
 
 # Constants pour SD direct
 CONF_SD_COMPONENT = "sd_component"
-CONF_CACHE_SIZE = "cache_size"
 
 # Constants pour les images SD
 CONF_SD_IMAGES = "sd_images"
-
 CONF_FILE_PATH = "file_path"
-CONF_BYTE_ORDER = "byte_order"
-CONF_CACHE_ENABLED = "cache_enabled"
-CONF_PRELOAD = "preload"
 
 storage_ns = cg.esphome_ns.namespace('storage')
 StorageComponent = storage_ns.class_('StorageComponent', cg.Component)
@@ -31,32 +25,21 @@ SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, cg.displa
 SdImageLoadAction = storage_ns.class_('SdImageLoadAction', automation.Action)
 SdImageUnloadAction = storage_ns.class_('SdImageUnloadAction', automation.Action)
 
-# Formats d'image en minuscules (pour YAML) -> valeurs pour C++
+# Formats d'image supportés (JPEG/PNG uniquement)
 IMAGE_FORMAT = {
     "rgb565": "RGB565",
     "rgb888": "RGB888", 
     "rgba": "RGBA",
-    "grayscale": "GRAYSCALE",
-    "binary": "BINARY",
-}
-
-# Ordre des bytes en minuscules (pour YAML) -> valeurs pour C++
-BYTE_ORDER = {
-    "little_endian": "LITTLE_ENDIAN",
-    "big_endian": "BIG_ENDIAN",
 }
 
 SD_IMAGE_SCHEMA = cv.Schema({
     cv.Required(CONF_ID): cv.declare_id(SdImageComponent),
     cv.Required(CONF_FILE_PATH): cv.string,
-    # CORRECTION: Pour JPEG/PNG, width/height sont optionnels (autodétection)
+    # Pour JPEG/PNG, width/height sont optionnels (autodétection)
     cv.Optional(CONF_WIDTH, default=0): cv.positive_int,
     cv.Optional(CONF_HEIGHT, default=0): cv.positive_int,
-    # Format optionnel pour JPEG/PNG (sera déterminé automatiquement)
+    # Format de sortie souhaité
     cv.Optional(CONF_FORMAT, default="rgb565"): cv.enum(IMAGE_FORMAT, lower=True),
-    cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER, lower=True),
-    cv.Optional(CONF_CACHE_ENABLED, default=True): cv.boolean,
-    cv.Optional(CONF_PRELOAD, default=False): cv.boolean,
     # Ajouter le type pour la compatibilité LVGL
     cv.Optional("type"): cv.enum(IMAGE_FORMAT, upper=True),
 }).extend(cv.COMPONENT_SCHEMA)
@@ -65,7 +48,6 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Required(CONF_PLATFORM): cv.one_of("sd_direct", lower=True),
     cv.Required(CONF_ID): cv.declare_id(StorageComponent),
     cv.Required(CONF_SD_COMPONENT): cv.use_id(cg.Component),
-    cv.Optional(CONF_CACHE_SIZE, default=0): cv.positive_int,
     cv.Optional(CONF_SD_IMAGES, default=[]): cv.ensure_list(SD_IMAGE_SCHEMA),
 }).extend(cv.COMPONENT_SCHEMA)
 
@@ -76,32 +58,22 @@ def detect_image_type(file_path):
         return 'jpeg'
     elif file_path_lower.endswith('.png'):
         return 'png'
-    elif file_path_lower.endswith('.bmp'):
-        return 'bmp'
     else:
-        return 'raw'  # Assume raw bitmap
+        raise cv.Invalid(f"Unsupported image format. Only JPEG (.jpg, .jpeg) and PNG (.png) are supported. Got: {file_path}")
 
 def validate_image_config(img_config):
     if not img_config[CONF_FILE_PATH].startswith("/"):
         raise cv.Invalid("Image file path must be absolute (start with '/')")
     
-    # Détecter le type de fichier
-    image_type = detect_image_type(img_config[CONF_FILE_PATH])
+    # Vérifier que c'est un fichier JPEG ou PNG
+    try:
+        image_type = detect_image_type(img_config[CONF_FILE_PATH])
+    except cv.Invalid as e:
+        raise e
     
-    # CORRECTION CRITIQUE: Ne valider les dimensions que pour les images RAW
-    if image_type == 'raw':
-        if img_config[CONF_WIDTH] <= 0 or img_config[CONF_HEIGHT] <= 0:
-            raise cv.Invalid("Width and height must be specified for raw bitmap files")
-        
-        # Vérifier les limites de taille pour raw seulement
-        if img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] > 1024 * 768:
-            raise cv.Invalid("Raw image dimensions too large (max 1024x768)")
-    else:
-        # Pour JPEG/PNG, les dimensions sont optionnelles (autodétection)
-        if img_config[CONF_WIDTH] <= 0:
-            img_config[CONF_WIDTH] = 0  # 0 = autodétection
-        if img_config[CONF_HEIGHT] <= 0:
-            img_config[CONF_HEIGHT] = 0  # 0 = autodétection
+    # Pour JPEG/PNG, les dimensions sont toujours en autodétection (ignorer les valeurs configurées)
+    img_config[CONF_WIDTH] = 0  # 0 = autodétection
+    img_config[CONF_HEIGHT] = 0  # 0 = autodétection
     
     # Auto-définir le type basé sur le format si pas défini
     if "type" not in img_config:
@@ -135,10 +107,6 @@ async def to_code(config):
     sd_component = await cg.get_variable(config[CONF_SD_COMPONENT])
     cg.add(var.set_sd_component(sd_component))
 
-    # Configuration du cache
-    if config[CONF_CACHE_SIZE] > 0:
-        cg.add(var.set_cache_size(config[CONF_CACHE_SIZE]))
-
     # Traitement des images SD
     if CONF_SD_IMAGES in config and config[CONF_SD_IMAGES]:
         for img_config in config[CONF_SD_IMAGES]:
@@ -155,44 +123,12 @@ async def process_sd_image_config(img_config, storage_component):
     cg.add(img_var.set_storage_component(storage_component))
     cg.add(img_var.set_file_path(img_config[CONF_FILE_PATH]))
     
-    # Configuration des dimensions (0 = autodétection pour JPEG/PNG)
-    cg.add(img_var.set_width(img_config[CONF_WIDTH]))
-    cg.add(img_var.set_height(img_config[CONF_HEIGHT]))
-
-    # Configuration du format - conversion minuscule YAML -> majuscule C++
+    # Configuration du format de sortie souhaité
     format_str = IMAGE_FORMAT[img_config[CONF_FORMAT]]
-    cg.add(img_var.set_format_string(format_str))
+    cg.add(img_var.set_output_format_string(format_str))
 
-    # Configuration de l'ordre des bytes - conversion minuscule YAML -> majuscule C++
-    byte_order_str = BYTE_ORDER[img_config[CONF_BYTE_ORDER]]
-    cg.add(img_var.set_byte_order_string(byte_order_str))
-
-    # Configuration des options
-    cg.add(img_var.set_cache_enabled(img_config[CONF_CACHE_ENABLED]))
-    cg.add(img_var.set_preload(img_config[CONF_PRELOAD]))
-
-    # CORRECTION CRITIQUE: Calculer la taille attendue SEULEMENT pour les fichiers raw
-    image_type = detect_image_type(img_config[CONF_FILE_PATH])
-    
-    if image_type == 'raw' and img_config[CONF_WIDTH] > 0 and img_config[CONF_HEIGHT] > 0:
-        format_sizes = {
-            "rgb565": 2,
-            "rgb888": 3,
-            "rgba": 4,
-            "grayscale": 1,
-            "binary": 1,
-        }
-
-        format_key = img_config[CONF_FORMAT]
-        if format_key == "binary":
-            data_size = (img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] + 7) // 8
-        else:
-            data_size = img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] * format_sizes[format_key]
-
-        cg.add(img_var.set_expected_data_size(data_size))
-    else:
-        # Pour JPEG/PNG, ne pas définir de taille attendue (sera calculée après décodage)
-        cg.add(img_var.set_expected_data_size(0))  # 0 = pas de vérification de taille
+    # Pas de taille attendue pour JPEG/PNG (sera déterminée après décodage)
+    # Pas de configuration des dimensions (autodétection)
     
     # Enregistrer comme image pour ESPHome
     cg.add_global(cg.RawStatement(f"// Register {img_config[CONF_ID].id} as image"))
@@ -228,5 +164,4 @@ async def sd_image_unload_to_code(config, action_id, template_arg, args):
     parent = await cg.get_variable(config[CONF_ID])
     cg.add(var.set_parent(parent))
     return var
-
 
