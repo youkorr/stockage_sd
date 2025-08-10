@@ -39,13 +39,31 @@ void StorageComponent::dump_config() {
   ESP_LOGCONFIG(TAG, "  SD Component: %s", this->sd_component_ ? "Connected" : "Not Connected");
 }
 
+// CORRECTIONS BASÉES SUR VOTRE WEBDAV QUI FONCTIONNE
+// Le problème principal : votre Storage utilise des méthodes qui n'existent probablement pas
+// dans votre composant SD ou qui retournent des résultats incorrects
+
+// ======== CORRECTION 1: Méthodes de lecture directes comme dans WebDAV ========
+
 bool StorageComponent::file_exists_direct(const std::string &path) {
   if (!this->sd_component_) {
     ESP_LOGE(TAG, "SD component not available");
     return false;
   }
   
-  return this->sd_component_->file_size(path) > 0;
+  ESP_LOGI(TAG, "Vérification existence fichier: %s", path.c_str());
+  
+  // CORRECTION: Utiliser stat() comme dans WebDAV au lieu de file_size()
+  struct stat st;
+  bool exists = (stat(path.c_str(), &st) == 0);
+  
+  if (exists) {
+    ESP_LOGI(TAG, "Fichier existe: %s (taille: %ld bytes)", path.c_str(), (long)st.st_size);
+  } else {
+    ESP_LOGI(TAG, "Fichier n'existe PAS: %s (errno: %d)", path.c_str(), errno);
+  }
+  
+  return exists;
 }
 
 std::vector<uint8_t> StorageComponent::read_file_direct(const std::string &path) {
@@ -54,7 +72,52 @@ std::vector<uint8_t> StorageComponent::read_file_direct(const std::string &path)
     return {};
   }
   
-  return this->sd_component_->read_file(path);
+  ESP_LOGI(TAG, "Lecture fichier: %s", path.c_str());
+  
+  // CORRECTION: Utiliser fopen/fread comme dans WebDAV au lieu des méthodes SD
+  FILE *file = fopen(path.c_str(), "rb");
+  if (!file) {
+    ESP_LOGE(TAG, "Impossible d'ouvrir le fichier: %s (errno: %d)", path.c_str(), errno);
+    return {};
+  }
+  
+  // Obtenir la taille du fichier
+  fseek(file, 0, SEEK_END);
+  size_t file_size = ftell(file);
+  fseek(file, 0, SEEK_SET);
+  
+  ESP_LOGI(TAG, "Taille du fichier: %zu bytes", file_size);
+  
+  if (file_size == 0) {
+    ESP_LOGW(TAG, "Fichier vide: %s", path.c_str());
+    fclose(file);
+    return {};
+  }
+  
+  // Allouer le buffer
+  std::vector<uint8_t> data(file_size);
+  
+  // Lire le fichier
+  size_t bytes_read = fread(data.data(), 1, file_size, file);
+  fclose(file);
+  
+  if (bytes_read != file_size) {
+    ESP_LOGE(TAG, "Lecture partielle: %zu/%zu bytes", bytes_read, file_size);
+    data.resize(bytes_read);  // Ajuster la taille
+  }
+  
+  ESP_LOGI(TAG, "Fichier lu avec succès: %zu bytes", bytes_read);
+  
+  // Log des premiers bytes pour debug
+  if (!data.empty()) {
+    ESP_LOGD(TAG, "Premiers bytes: %02X %02X %02X %02X %02X %02X %02X %02X",
+             data[0], data.size() > 1 ? data[1] : 0, 
+             data.size() > 2 ? data[2] : 0, data.size() > 3 ? data[3] : 0,
+             data.size() > 4 ? data[4] : 0, data.size() > 5 ? data[5] : 0,
+             data.size() > 6 ? data[6] : 0, data.size() > 7 ? data[7] : 0);
+  }
+  
+  return data;
 }
 
 bool StorageComponent::write_file_direct(const std::string &path, const std::vector<uint8_t> &data) {
@@ -63,7 +126,24 @@ bool StorageComponent::write_file_direct(const std::string &path, const std::vec
     return false;
   }
   
-  this->sd_component_->write_file(path.c_str(), data.data(), data.size());
+  ESP_LOGI(TAG, "Écriture fichier: %s (%zu bytes)", path.c_str(), data.size());
+  
+  // CORRECTION: Utiliser fopen/fwrite comme dans WebDAV
+  FILE *file = fopen(path.c_str(), "wb");
+  if (!file) {
+    ESP_LOGE(TAG, "Impossible de créer le fichier: %s (errno: %d)", path.c_str(), errno);
+    return false;
+  }
+  
+  size_t written = fwrite(data.data(), 1, data.size(), file);
+  fclose(file);
+  
+  if (written != data.size()) {
+    ESP_LOGE(TAG, "Écriture partielle: %zu/%zu bytes", written, data.size());
+    return false;
+  }
+  
+  ESP_LOGI(TAG, "Fichier écrit avec succès: %zu bytes", written);
   return true;
 }
 
@@ -73,46 +153,99 @@ size_t StorageComponent::get_file_size(const std::string &path) {
     return 0;
   }
   
-  return this->sd_component_->file_size(path);
+  // CORRECTION: Utiliser stat() comme dans WebDAV
+  struct stat st;
+  if (stat(path.c_str(), &st) == 0) {
+    ESP_LOGI(TAG, "Taille du fichier %s: %ld bytes", path.c_str(), (long)st.st_size);
+    return st.st_size;
+  } else {
+    ESP_LOGE(TAG, "Impossible d'obtenir la taille de %s (errno: %d)", path.c_str(), errno);
+    return 0;
+  }
 }
 
-// ======== SdImageComponent Implementation ========
+// ======== CORRECTION 2: Test de diagnostic dans setup() ========
 
-void SdImageComponent::setup() {
-  ESP_LOGCONFIG(TAG_IMAGE, "Setting up SD Image Component...");
+void StorageComponent::setup() {
+  ESP_LOGCONFIG(TAG, "Setting up Storage Component...");
   
-  if (!this->storage_component_) {
-    ESP_LOGE(TAG_IMAGE, "Storage component not set!");
+  if (!this->sd_component_) {
+    ESP_LOGE(TAG, "SD component not set!");
     this->mark_failed();
     return;
   }
   
-  if (!this->validate_file_path()) {
-    ESP_LOGE(TAG_IMAGE, "Invalid file path: %s", this->file_path_.c_str());
-    this->mark_failed();
-    return;
+  ESP_LOGD(TAG, "Platform: %s", this->platform_.c_str());
+  if (this->cache_size_ > 0) {
+    ESP_LOGD(TAG, "Cache size: %zu bytes", this->cache_size_);
   }
   
-  // Vérifier si le fichier existe sur la SD
-  if (!this->storage_component_->file_exists_direct(this->file_path_)) {
-    ESP_LOGW(TAG_IMAGE, "Image file does not exist: %s", this->file_path_.c_str());
-    // Ne pas marquer comme failed, juste avertir
+  // AJOUT: Test diagnostic complet comme dans WebDAV
+  ESP_LOGI(TAG, "=== DIAGNOSTIC SYSTÈME DE FICHIERS ===");
+  
+  // Test d'accès au répertoire racine de la SD (supposons "/")
+  std::string root_path = "/";  // Ajustez selon votre configuration
+  
+  DIR *dir = opendir(root_path.c_str());
+  if (!dir) {
+    ESP_LOGE(TAG, "Impossible d'accéder à la racine SD (errno: %d)", errno);
   } else {
-    ESP_LOGI(TAG_IMAGE, "Image file found: %s (size: %zu bytes)", 
-             this->file_path_.c_str(), 
-             this->storage_component_->get_file_size(this->file_path_));
-  }
-  
-  // Précharger l'image si demandé
-  if (this->preload_) {
-    if (this->load_image()) {
-      ESP_LOGI(TAG_IMAGE, "Image preloaded successfully");
-    } else {
-      ESP_LOGW(TAG_IMAGE, "Failed to preload image");
+    ESP_LOGI(TAG, "Accès SD réussi");
+    
+    // Lister le contenu pour vérifier vos fichiers
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != nullptr) {
+      if (strcmp(entry->d_name, ".") && strcmp(entry->d_name, "..")) {
+        std::string full_path = root_path + entry->d_name;
+        
+        struct stat st;
+        if (stat(full_path.c_str(), &st) == 0) {
+          ESP_LOGI(TAG, "  Trouvé: %s (%s, %ld bytes)", 
+                  entry->d_name,
+                  S_ISDIR(st.st_mode) ? "dossier" : "fichier",
+                  (long)st.st_size);
+        }
+      }
     }
+    closedir(dir);
   }
   
-  ESP_LOGCONFIG(TAG_IMAGE, "SD Image Component setup complete");
+  // Test spécifique avec un fichier image si il existe
+  std::string test_image = "/image1.jpg";  // Remplacez par votre fichier
+  struct stat st;
+  if (stat(test_image.c_str(), &st) == 0) {
+    ESP_LOGI(TAG, "Image test trouvée: %s (%ld bytes)", test_image.c_str(), (long)st.st_size);
+    
+    // Test de lecture des premiers bytes
+    FILE *f = fopen(test_image.c_str(), "rb");
+    if (f) {
+      uint8_t header[16];
+      size_t read_bytes = fread(header, 1, 16, f);
+      fclose(f);
+      
+      if (read_bytes > 0) {
+        ESP_LOGI(TAG, "Premiers 16 bytes: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                header[0], header[1], header[2], header[3], header[4], header[5], header[6], header[7],
+                header[8], header[9], header[10], header[11], header[12], header[13], header[14], header[15]);
+        
+        // Vérifier si c'est un JPEG
+        if (read_bytes >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF) {
+          ESP_LOGI(TAG, "✅ Format JPEG détecté");
+        } else if (read_bytes >= 8 && header[0] == 0x89 && header[1] == 0x50 && 
+                   header[2] == 0x4E && header[3] == 0x47) {
+          ESP_LOGI(TAG, "✅ Format PNG détecté");
+        } else {
+          ESP_LOGI(TAG, "Format d'image inconnu ou données brutes");
+        }
+      }
+    }
+  } else {
+    ESP_LOGE(TAG, "Image test non trouvée: %s", test_image.c_str());
+  }
+  
+  ESP_LOGI(TAG, "=== FIN DIAGNOSTIC ===");
+  
+  ESP_LOGCONFIG(TAG, "Storage Component setup complete");
 }
 
 void SdImageComponent::dump_config() {
