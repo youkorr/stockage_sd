@@ -49,7 +49,7 @@ BYTE_ORDER = {
 SD_IMAGE_SCHEMA = cv.Schema({
     cv.Required(CONF_ID): cv.declare_id(SdImageComponent),
     cv.Required(CONF_FILE_PATH): cv.string,
-    # Pour JPEG/PNG, width/height sont optionnels (autodétection)
+    # CORRECTION: Pour JPEG/PNG, width/height sont optionnels (autodétection)
     cv.Optional(CONF_WIDTH, default=0): cv.positive_int,
     cv.Optional(CONF_HEIGHT, default=0): cv.positive_int,
     # Format optionnel pour JPEG/PNG (sera déterminé automatiquement)
@@ -69,24 +69,39 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Optional(CONF_SD_IMAGES, default=[]): cv.ensure_list(SD_IMAGE_SCHEMA),
 }).extend(cv.COMPONENT_SCHEMA)
 
+def detect_image_type(file_path):
+    """Détecter le type d'image basé sur l'extension"""
+    file_path_lower = file_path.lower()
+    if file_path_lower.endswith(('.jpg', '.jpeg')):
+        return 'jpeg'
+    elif file_path_lower.endswith('.png'):
+        return 'png'
+    elif file_path_lower.endswith('.bmp'):
+        return 'bmp'
+    else:
+        return 'raw'  # Assume raw bitmap
+
 def validate_image_config(img_config):
     if not img_config[CONF_FILE_PATH].startswith("/"):
         raise cv.Invalid("Image file path must be absolute (start with '/')")
     
     # Détecter le type de fichier
-    file_path = img_config[CONF_FILE_PATH].lower()
-    is_jpeg = file_path.endswith(('.jpg', '.jpeg'))
-    is_png = file_path.endswith('.png')
-    is_raw = not (is_jpeg or is_png)
+    image_type = detect_image_type(img_config[CONF_FILE_PATH])
     
-    # Pour les fichiers raw, les dimensions sont obligatoires
-    if is_raw:
+    # CORRECTION CRITIQUE: Ne valider les dimensions que pour les images RAW
+    if image_type == 'raw':
         if img_config[CONF_WIDTH] <= 0 or img_config[CONF_HEIGHT] <= 0:
             raise cv.Invalid("Width and height must be specified for raw bitmap files")
         
-        # Vérifier les limites de taille pour raw
+        # Vérifier les limites de taille pour raw seulement
         if img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] > 1024 * 768:
             raise cv.Invalid("Raw image dimensions too large (max 1024x768)")
+    else:
+        # Pour JPEG/PNG, les dimensions sont optionnelles (autodétection)
+        if img_config[CONF_WIDTH] <= 0:
+            img_config[CONF_WIDTH] = 0  # 0 = autodétection
+        if img_config[CONF_HEIGHT] <= 0:
+            img_config[CONF_HEIGHT] = 0  # 0 = autodétection
     
     # Auto-définir le type basé sur le format si pas défini
     if "type" not in img_config:
@@ -156,8 +171,10 @@ async def process_sd_image_config(img_config, storage_component):
     cg.add(img_var.set_cache_enabled(img_config[CONF_CACHE_ENABLED]))
     cg.add(img_var.set_preload(img_config[CONF_PRELOAD]))
 
-    # Calcul de la taille des données seulement pour les fichiers raw
-    if img_config[CONF_WIDTH] > 0 and img_config[CONF_HEIGHT] > 0:
+    # CORRECTION CRITIQUE: Calculer la taille attendue SEULEMENT pour les fichiers raw
+    image_type = detect_image_type(img_config[CONF_FILE_PATH])
+    
+    if image_type == 'raw' and img_config[CONF_WIDTH] > 0 and img_config[CONF_HEIGHT] > 0:
         format_sizes = {
             "rgb565": 2,
             "rgb888": 3,
@@ -173,6 +190,9 @@ async def process_sd_image_config(img_config, storage_component):
             data_size = img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] * format_sizes[format_key]
 
         cg.add(img_var.set_expected_data_size(data_size))
+    else:
+        # Pour JPEG/PNG, ne pas définir de taille attendue (sera calculée après décodage)
+        cg.add(img_var.set_expected_data_size(0))  # 0 = pas de vérification de taille
     
     # Enregistrer comme image pour ESPHome
     cg.add_global(cg.RawStatement(f"// Register {img_config[CONF_ID].id} as image"))
@@ -208,6 +228,5 @@ async def sd_image_unload_to_code(config, action_id, template_arg, args):
     parent = await cg.get_variable(config[CONF_ID])
     cg.add(var.set_parent(parent))
     return var
-
 
 
