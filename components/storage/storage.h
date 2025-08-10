@@ -55,7 +55,7 @@ class StorageComponent : public Component {
  private:
   std::string platform_;
   sd_mmc_card::SdMmc *sd_component_{nullptr};
-  //std::string root_path_{"/"};
+  
 };
 
 // Classe pour les images SD - HÉRITE CORRECTEMENT de display::BaseImage
