@@ -4,6 +4,12 @@ from esphome.const import CONF_ID, CONF_PLATFORM, CONF_WIDTH, CONF_HEIGHT, CONF_
 from esphome import automation
 from esphome.components import image
 
+# Correction pour compatibilité ESPHome 2025.x et anciennes versions
+try:
+    from esphome.components import display
+except ImportError:
+    display = cg.display
+
 DEPENDENCIES = ['sd_mmc_card', 'display']
 CODEOWNERS = ["@youkorr"]
 
@@ -20,7 +26,7 @@ CONF_FILE_PATH = "file_path"
 
 storage_ns = cg.esphome_ns.namespace('storage')
 StorageComponent = storage_ns.class_('StorageComponent', cg.Component)
-SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, cg.display.BaseImage)
+SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, display.BaseImage)
 
 SdImageLoadAction = storage_ns.class_('SdImageLoadAction', automation.Action)
 SdImageUnloadAction = storage_ns.class_('SdImageUnloadAction', automation.Action)
@@ -71,9 +77,9 @@ def validate_image_config(img_config):
     except cv.Invalid as e:
         raise e
     
-    # Pour JPEG/PNG, les dimensions sont toujours en autodétection (ignorer les valeurs configurées)
-    img_config[CONF_WIDTH] = 0  # 0 = autodétection
-    img_config[CONF_HEIGHT] = 0  # 0 = autodétection
+    # Pour JPEG/PNG, les dimensions sont toujours en autodétection
+    img_config[CONF_WIDTH] = 0
+    img_config[CONF_HEIGHT] = 0
     
     # Auto-définir le type basé sur le format si pas défini
     if "type" not in img_config:
@@ -123,14 +129,10 @@ async def process_sd_image_config(img_config, storage_component):
     cg.add(img_var.set_storage_component(storage_component))
     cg.add(img_var.set_file_path(img_config[CONF_FILE_PATH]))
     
-    # Configuration du format de sortie souhaité
+    # Format de sortie
     format_str = IMAGE_FORMAT[img_config[CONF_FORMAT]]
     cg.add(img_var.set_output_format_string(format_str))
-
-    # Pas de taille attendue pour JPEG/PNG (sera déterminée après décodage)
-    # Pas de configuration des dimensions (autodétection)
     
-    # Enregistrer comme image pour ESPHome
     cg.add_global(cg.RawStatement(f"// Register {img_config[CONF_ID].id} as image"))
     
     return img_var
