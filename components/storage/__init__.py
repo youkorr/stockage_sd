@@ -48,7 +48,7 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Required(CONF_PLATFORM): cv.one_of("sd_direct", lower=True),
     cv.Required(CONF_ID): cv.declare_id(StorageComponent),
     cv.Required(CONF_SD_COMPONENT): cv.use_id(cg.Component),
-    cv.Optional(CONF_ROOT_PATH, default="/"): cv.string, 
+    #cv.Optional(CONF_ROOT_PATH, default="/"): cv.string, 
     cv.Optional(CONF_SD_IMAGES, default=[]): cv.ensure_list(SD_IMAGE_SCHEMA),
 }).extend(cv.COMPONENT_SCHEMA)
 
