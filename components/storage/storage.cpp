@@ -3,6 +3,12 @@
 #include "esphome/core/hal.h"
 #include "esphome/components/display/display.h"
 
+// Inclure les décodeurs ESP32-P4
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+#include "esp_jpeg_dec.h"
+#include "esp_png_dec.h"
+#endif
+
 namespace esphome {
 namespace storage {
 
@@ -87,20 +93,11 @@ void SdImageComponent::setup() {
     return;
   }
   
-  if (!this->validate_dimensions()) {
-    ESP_LOGE(TAG_IMAGE, "Invalid image dimensions: %dx%d", this->width_, this->height_);
-    this->mark_failed();
-    return;
-  }
-  
   if (!this->validate_file_path()) {
     ESP_LOGE(TAG_IMAGE, "Invalid file path: %s", this->file_path_.c_str());
     this->mark_failed();
     return;
   }
-  
-  // Calculer la taille attendue
-  this->expected_data_size_ = this->calculate_expected_size();
   
   // Vérifier si le fichier existe sur la SD
   if (!this->storage_component_->file_exists_direct(this->file_path_)) {
@@ -142,7 +139,7 @@ void SdImageComponent::set_format_string(const std::string &format) {
   if (format == "RGB565") this->format_ = ImageFormat::rgb565;
   else if (format == "RGB888") this->format_ = ImageFormat::rgb888;
   else if (format == "RGBA") this->format_ = ImageFormat::rgba;
-  else if (format == "GRAYSCALE") this->format_ = ImageFormat::grayscale;  // Fixed spelling
+  else if (format == "GRAYSCALE") this->format_ = ImageFormat::grayscale;
   else if (format == "BINARY") this->format_ = ImageFormat::binary;
   else {
     ESP_LOGW(TAG_IMAGE, "Unknown format: %s, using RGB565", format.c_str());
@@ -183,51 +180,202 @@ bool SdImageComponent::load_image_from_path(const std::string &path) {
   }
   
   // Lire les données depuis la SD
-  std::vector<uint8_t> data = this->storage_component_->read_file_direct(path);
+  std::vector<uint8_t> file_data = this->storage_component_->read_file_direct(path);
   
-  if (data.empty()) {
+  if (file_data.empty()) {
     ESP_LOGE(TAG_IMAGE, "Failed to read image file: %s", path.c_str());
     return false;
   }
   
-  // Vérifier la taille des données
-  if (this->expected_data_size_ > 0 && data.size() != this->expected_data_size_) {
-    ESP_LOGW(TAG_IMAGE, "Image size mismatch. Expected: %zu, Got: %zu", 
-             this->expected_data_size_, data.size());
-    // Continuer quand même, mais avec avertissement
-  }
+  ESP_LOGD(TAG_IMAGE, "Read %zu bytes from file", file_data.size());
   
-  // Conversion de l'ordre des bytes si nécessaire
-  if (this->byte_order_ == ByteOrder::big_endian && this->get_pixel_size() > 1) {
-    this->convert_byte_order(data);
-  }
-  
-  // Stocker les données
-  if (this->cache_enabled_) {
-    this->image_data_ = std::move(data);
-    this->is_loaded_ = true;
-    ESP_LOGD(TAG_IMAGE, "Image loaded and cached: %zu bytes", this->image_data_.size());
+  // Détecter le type de fichier et décoder
+  bool decode_success = false;
+  if (this->is_jpeg_file(file_data)) {
+    ESP_LOGD(TAG_IMAGE, "Detected JPEG file");
+    decode_success = this->decode_jpeg(file_data);
+  } else if (this->is_png_file(file_data)) {
+    ESP_LOGD(TAG_IMAGE, "Detected PNG file");
+    decode_success = this->decode_png(file_data);
   } else {
-    // Mode streaming - pas de cache
-    this->streaming_mode_ = true;
-    this->is_loaded_ = true;
-    ESP_LOGD(TAG_IMAGE, "Image loaded in streaming mode");
+    ESP_LOGD(TAG_IMAGE, "Assuming raw bitmap data");
+    decode_success = this->load_raw_data(file_data);
+  }
+  
+  if (!decode_success) {
+    ESP_LOGE(TAG_IMAGE, "Failed to decode image: %s", path.c_str());
+    return false;
   }
   
   // Mettre à jour le chemin actuel
   this->file_path_ = path;
+  this->is_loaded_ = true;
   
+  ESP_LOGI(TAG_IMAGE, "Image loaded successfully: %dx%d, %zu bytes", 
+           this->width_, this->height_, this->image_data_.size());
+  
+  return true;
+}
+
+bool SdImageComponent::is_jpeg_file(const std::vector<uint8_t> &data) {
+  return data.size() >= 3 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF;
+}
+
+bool SdImageComponent::is_png_file(const std::vector<uint8_t> &data) {
+  const uint8_t png_signature[] = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+  return data.size() >= 8 && memcmp(data.data(), png_signature, 8) == 0;
+}
+
+bool SdImageComponent::decode_jpeg(const std::vector<uint8_t> &jpeg_data) {
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+  ESP_LOGD(TAG_IMAGE, "Decoding JPEG using ESP32-P4 hardware decoder");
+  
+  esp_jpeg_decoder_handle_t decoder = nullptr;
+  esp_jpeg_decoder_config_t config = {
+    .output_format = JPEG_DECODE_OUT_FORMAT_RGB888,
+    .rotate = JPEG_ROTATE_0_DEGREE,
+  };
+  
+  esp_err_t ret = esp_jpeg_decoder_init(&config, &decoder);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG_IMAGE, "Failed to init JPEG decoder: %s", esp_err_to_name(ret));
+    return false;
+  }
+  
+  // Obtenir les informations de l'image
+  esp_jpeg_image_info_t info;
+  ret = esp_jpeg_decoder_get_info(decoder, jpeg_data.data(), jpeg_data.size(), &info);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG_IMAGE, "Failed to get JPEG info: %s", esp_err_to_name(ret));
+    esp_jpeg_decoder_deinit(decoder);
+    return false;
+  }
+  
+  ESP_LOGD(TAG_IMAGE, "JPEG info: %dx%d", info.width, info.height);
+  
+  // Mettre à jour les dimensions
+  this->width_ = info.width;
+  this->height_ = info.height;
+  
+  // Allouer le buffer de sortie (RGB888 = 3 bytes par pixel)
+  size_t output_size = info.width * info.height * 3;
+  this->image_data_.resize(output_size);
+  
+  // Décoder l'image
+  size_t decoded_size;
+  ret = esp_jpeg_decoder_process(decoder, jpeg_data.data(), jpeg_data.size(),
+                                this->image_data_.data(), output_size, &decoded_size);
+  
+  esp_jpeg_decoder_deinit(decoder);
+  
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG_IMAGE, "Failed to decode JPEG: %s", esp_err_to_name(ret));
+    return false;
+  }
+  
+  // Forcer le format RGB888 puisque c'est ce que nous avons décodé
+  this->format_ = ImageFormat::rgb888;
+  ESP_LOGD(TAG_IMAGE, "JPEG decoded successfully: %zu bytes", decoded_size);
+  
+  return true;
+#else
+  ESP_LOGW(TAG_IMAGE, "JPEG decoding not supported on this target");
+  return false;
+#endif
+}
+
+bool SdImageComponent::decode_png(const std::vector<uint8_t> &png_data) {
+#ifdef CONFIG_IDF_TARGET_ESP32P4
+  ESP_LOGD(TAG_IMAGE, "Decoding PNG using ESP32-P4 hardware decoder");
+  
+  esp_png_decoder_handle_t decoder = nullptr;
+  esp_png_decoder_config_t config = {
+    .output_format = PNG_DECODE_OUT_FORMAT_RGB888,
+  };
+  
+  esp_err_t ret = esp_png_decoder_init(&config, &decoder);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG_IMAGE, "Failed to init PNG decoder: %s", esp_err_to_name(ret));
+    return false;
+  }
+  
+  // Obtenir les informations de l'image
+  esp_png_image_info_t info;
+  ret = esp_png_decoder_get_info(decoder, png_data.data(), png_data.size(), &info);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG_IMAGE, "Failed to get PNG info: %s", esp_err_to_name(ret));
+    esp_png_decoder_deinit(decoder);
+    return false;
+  }
+  
+  ESP_LOGD(TAG_IMAGE, "PNG info: %dx%d", info.width, info.height);
+  
+  // Mettre à jour les dimensions
+  this->width_ = info.width;
+  this->height_ = info.height;
+  
+  // Allouer le buffer de sortie (RGB888 = 3 bytes par pixel)
+  size_t output_size = info.width * info.height * 3;
+  this->image_data_.resize(output_size);
+  
+  // Décoder l'image
+  size_t decoded_size;
+  ret = esp_png_decoder_process(decoder, png_data.data(), png_data.size(),
+                               this->image_data_.data(), output_size, &decoded_size);
+  
+  esp_png_decoder_deinit(decoder);
+  
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG_IMAGE, "Failed to decode PNG: %s", esp_err_to_name(ret));
+    return false;
+  }
+  
+  // Forcer le format RGB888 puisque c'est ce que nous avons décodé
+  this->format_ = ImageFormat::rgb888;
+  ESP_LOGD(TAG_IMAGE, "PNG decoded successfully: %zu bytes", decoded_size);
+  
+  return true;
+#else
+  ESP_LOGW(TAG_IMAGE, "PNG decoding not supported on this target");
+  return false;
+#endif
+}
+
+bool SdImageComponent::load_raw_data(const std::vector<uint8_t> &raw_data) {
+  ESP_LOGD(TAG_IMAGE, "Loading raw bitmap data");
+  
+  // Pour les données brutes, nous devons connaître les dimensions à l'avance
+  if (this->width_ <= 0 || this->height_ <= 0) {
+    ESP_LOGE(TAG_IMAGE, "Dimensions must be set for raw data: %dx%d", this->width_, this->height_);
+    return false;
+  }
+  
+  // Calculer la taille attendue
+  size_t expected_size = this->calculate_expected_size();
+  
+  if (raw_data.size() != expected_size) {
+    ESP_LOGW(TAG_IMAGE, "Raw data size mismatch. Expected: %zu, Got: %zu", 
+             expected_size, raw_data.size());
+    // Continuer quand même, mais avec avertissement
+  }
+  
+  // Copier les données
+  this->image_data_ = raw_data;
+  
+  // Conversion de l'ordre des bytes si nécessaire
+  if (this->byte_order_ == ByteOrder::big_endian && this->get_pixel_size() > 1) {
+    this->convert_byte_order(this->image_data_);
+  }
+  
+  ESP_LOGD(TAG_IMAGE, "Raw data loaded: %zu bytes", this->image_data_.size());
   return true;
 }
 
 void SdImageComponent::unload_image() {
   ESP_LOGD(TAG_IMAGE, "Unloading image");
   
-  if (this->cache_enabled_) {
-    this->image_data_.clear();
-    this->image_data_.shrink_to_fit();
-  }
-  
+  this->image_data_.clear();
+  this->image_data_.shrink_to_fit();
   this->is_loaded_ = false;
   this->streaming_mode_ = false;
   
@@ -239,12 +387,14 @@ bool SdImageComponent::reload_image() {
   return this->load_image_from_path(this->file_path_);
 }
 
-// Méthodes héritées de image::Image
+// Méthodes héritées de display::BaseImage
 void SdImageComponent::draw(int x, int y, display::Display *display, Color color_on, Color color_off) {
   if (!this->is_loaded_ || this->image_data_.empty()) {
     ESP_LOGW(TAG_IMAGE, "Cannot draw: image not loaded");
     return;
   }
+
+  ESP_LOGD(TAG_IMAGE, "Drawing image at %d,%d (size: %dx%d)", x, y, this->width_, this->height_);
 
   for (int img_y = 0; img_y < this->height_; img_y++) {
     for (int img_x = 0; img_x < this->width_; img_x++) {
@@ -256,20 +406,21 @@ void SdImageComponent::draw(int x, int y, display::Display *display, Color color
         continue;
 
       Color pixel_color(red, green, blue);
-      display->draw_absolute_pixel(x + img_x, y + img_y, pixel_color);
+      display->draw_pixel_at(x + img_x, y + img_y, pixel_color);
     }
   }
+  
+  ESP_LOGD(TAG_IMAGE, "Image draw completed");
 }
 
-// FIXED: Renamed from get_type() to get_image_type() to match header declaration
 ImageType SdImageComponent::get_image_type() const {
   switch (this->format_) {
     case ImageFormat::rgb565:
       return image::IMAGE_TYPE_RGB565;
     case ImageFormat::rgb888:
-      return image::IMAGE_TYPE_RGB;  // ESPHome utilise RGB pour RGB24
+      return image::IMAGE_TYPE_RGB;
     case ImageFormat::rgba:
-      return image::IMAGE_TYPE_RGB;  // Fallback vers RGB
+      return image::IMAGE_TYPE_RGBA;
     case ImageFormat::grayscale:
       return image::IMAGE_TYPE_GRAYSCALE;
     case ImageFormat::binary:
@@ -293,11 +444,6 @@ void SdImageComponent::get_pixel(int x, int y, uint8_t &red, uint8_t &green, uin
     return;
   }
   
-  if (this->streaming_mode_) {
-    this->get_pixel_streamed(x, y, red, green, blue, alpha);
-    return;
-  }
-  
   if (!this->is_loaded_ || this->image_data_.empty()) {
     red = green = blue = alpha = 0;
     return;
@@ -305,41 +451,13 @@ void SdImageComponent::get_pixel(int x, int y, uint8_t &red, uint8_t &green, uin
   
   size_t offset = this->get_pixel_offset(x, y);
   if (offset + this->get_pixel_size() > this->image_data_.size()) {
-    ESP_LOGE(TAG_IMAGE, "Pixel offset out of bounds: %zu", offset);
+    ESP_LOGE(TAG_IMAGE, "Pixel offset out of bounds: %zu (max: %zu)", 
+             offset + this->get_pixel_size(), this->image_data_.size());
     red = green = blue = alpha = 0;
     return;
   }
   
   const uint8_t *pixel_data = &this->image_data_[offset];
-  this->convert_pixel_format(x, y, pixel_data, red, green, blue, alpha);
-}
-
-// Version sans alpha pour streaming
-void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const {
-  uint8_t alpha;
-  this->get_pixel_streamed(x, y, red, green, blue, alpha);
-}
-
-// Version avec alpha pour streaming
-void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const {
-  // Pour le mode streaming, lire directement depuis la SD
-  if (!this->storage_component_) {
-    red = green = blue = alpha = 0;
-    return;
-  }
-  
-  size_t offset = this->get_pixel_offset(x, y);
-  size_t pixel_size = this->get_pixel_size();
-  
-  // Lire seulement les bytes nécessaires pour ce pixel
-  std::vector<uint8_t> data = this->storage_component_->read_file_direct(this->file_path_);
-  
-  if (data.size() <= offset + pixel_size) {
-    red = green = blue = alpha = 0;
-    return;
-  }
-  
-  const uint8_t *pixel_data = &data[offset];
   this->convert_pixel_format(x, y, pixel_data, red, green, blue, alpha);
 }
 
@@ -366,14 +484,13 @@ void SdImageComponent::convert_pixel_format(int x, int y, const uint8_t *pixel_d
       blue = pixel_data[2];
       alpha = pixel_data[3];
       break;
-    case ImageFormat::grayscale:  // Fixed spelling
+    case ImageFormat::grayscale:
       red = green = blue = pixel_data[0];
       alpha = 255;
       break;
     case ImageFormat::binary: {
-      int byte_index = (y * this->width_ + x) / 8;
-      int bit_index = (y * this->width_ + x) % 8;
-      bool pixel_on = (pixel_data[byte_index] >> (7 - bit_index)) & 1;
+      int bit_pos = (y * this->width_ + x) % 8;
+      bool pixel_on = (pixel_data[0] >> (7 - bit_pos)) & 1;
       red = green = blue = pixel_on ? 255 : 0;
       alpha = 255;
       break;
@@ -389,12 +506,12 @@ size_t SdImageComponent::get_pixel_size() const {
       return 3;
     case ImageFormat::rgba:
       return 4;
-    case ImageFormat::grayscale:  // Fixed spelling
+    case ImageFormat::grayscale:
       return 1;
     case ImageFormat::binary:
       return 1; // Géré spécialement
     default:
-      return 2;
+      return 3; // Default RGB888
   }
 }
 
@@ -440,7 +557,7 @@ std::string SdImageComponent::get_format_string() const {
     case ImageFormat::rgb565: return "RGB565";
     case ImageFormat::rgb888: return "RGB888";
     case ImageFormat::rgba: return "RGBA";
-    case ImageFormat::grayscale: return "Grayscale";  // Fixed spelling
+    case ImageFormat::grayscale: return "Grayscale";
     case ImageFormat::binary: return "Binary";
     default: return "Unknown";
   }
@@ -448,22 +565,12 @@ std::string SdImageComponent::get_format_string() const {
 
 bool SdImageComponent::validate_image_data() const {
   if (!this->is_loaded_) return false;
-  
-  size_t expected_size = this->calculate_expected_size();
-  if (this->cache_enabled_) {
-    return this->image_data_.size() == expected_size;
-  }
-  
-  // Pour le mode streaming, vérifier que le fichier existe et a la bonne taille
-  std::vector<uint8_t> data = this->storage_component_->read_file_direct(this->file_path_);
-  return data.size() == expected_size;
+  return !this->image_data_.empty();
 }
 
 void SdImageComponent::free_cache() {
-  if (this->cache_enabled_) {
-    this->image_data_.clear();
-    this->image_data_.shrink_to_fit();
-  }
+  this->image_data_.clear();
+  this->image_data_.shrink_to_fit();
 }
 
 bool SdImageComponent::read_image_from_storage() {
@@ -478,6 +585,34 @@ bool SdImageComponent::read_image_from_storage() {
   
   this->image_data_ = std::move(data);
   return true;
+}
+
+// Version streaming pour gestion mémoire limitée
+void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const {
+  // Pour le mode streaming, lire directement depuis la SD
+  if (!this->storage_component_) {
+    red = green = blue = alpha = 0;
+    return;
+  }
+  
+  size_t offset = this->get_pixel_offset(x, y);
+  size_t pixel_size = this->get_pixel_size();
+  
+  // Lire seulement les bytes nécessaires pour ce pixel
+  std::vector<uint8_t> data = this->storage_component_->read_file_direct(this->file_path_);
+  
+  if (data.size() <= offset + pixel_size) {
+    red = green = blue = alpha = 0;
+    return;
+  }
+  
+  const uint8_t *pixel_data = &data[offset];
+  this->convert_pixel_format(x, y, pixel_data, red, green, blue, alpha);
+}
+
+void SdImageComponent::get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const {
+  uint8_t alpha;
+  this->get_pixel_streamed(x, y, red, green, blue, alpha);
 }
 
 }  // namespace storage
