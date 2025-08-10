@@ -4,7 +4,7 @@ from esphome.const import CONF_ID, CONF_PLATFORM, CONF_WIDTH, CONF_HEIGHT, CONF_
 from esphome import automation
 from esphome.components import image
 
-DEPENDENCIES = ['sd_mmc_card', 'image']
+DEPENDENCIES = ['sd_mmc_card', 'display']
 CODEOWNERS = ["@youkorr"]
 
 # Configuration constants
@@ -26,8 +26,7 @@ CONF_PRELOAD = "preload"
 
 storage_ns = cg.esphome_ns.namespace('storage')
 StorageComponent = storage_ns.class_('StorageComponent', cg.Component)
-# IMPORTANT: Utiliser le bon héritage pour image::Image
-SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, image.Image_)
+SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, cg.display.BaseImage)
 
 SdImageLoadAction = storage_ns.class_('SdImageLoadAction', automation.Action)
 SdImageUnloadAction = storage_ns.class_('SdImageUnloadAction', automation.Action)
@@ -50,15 +49,17 @@ BYTE_ORDER = {
 SD_IMAGE_SCHEMA = cv.Schema({
     cv.Required(CONF_ID): cv.declare_id(SdImageComponent),
     cv.Required(CONF_FILE_PATH): cv.string,
-    cv.Required(CONF_WIDTH): cv.positive_int,
-    cv.Required(CONF_HEIGHT): cv.positive_int,
-    cv.Required(CONF_FORMAT): cv.enum(IMAGE_FORMAT, lower=True),  # lower=True pour accepter minuscules
+    # Pour JPEG/PNG, width/height sont optionnels (autodétection)
+    cv.Optional(CONF_WIDTH, default=0): cv.positive_int,
+    cv.Optional(CONF_HEIGHT, default=0): cv.positive_int,
+    # Format optionnel pour JPEG/PNG (sera déterminé automatiquement)
+    cv.Optional(CONF_FORMAT, default="rgb888"): cv.enum(IMAGE_FORMAT, lower=True),
     cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER, lower=True),
     cv.Optional(CONF_CACHE_ENABLED, default=True): cv.boolean,
     cv.Optional(CONF_PRELOAD, default=False): cv.boolean,
     # Ajouter le type pour la compatibilité LVGL
     cv.Optional("type"): cv.enum(IMAGE_FORMAT, upper=True),
-}).extend(cv.COMPONENT_SCHEMA)  # Enlever .extend(image.IMAGE_SCHEMA)
+}).extend(cv.COMPONENT_SCHEMA)
 
 CONFIG_SCHEMA = cv.Schema({
     cv.Required(CONF_PLATFORM): cv.one_of("sd_direct", lower=True),
@@ -71,8 +72,21 @@ CONFIG_SCHEMA = cv.Schema({
 def validate_image_config(img_config):
     if not img_config[CONF_FILE_PATH].startswith("/"):
         raise cv.Invalid("Image file path must be absolute (start with '/')")
-    if img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] > 1024 * 768:
-        raise cv.Invalid("Image dimensions too large (max 1024x768)")
+    
+    # Détecter le type de fichier
+    file_path = img_config[CONF_FILE_PATH].lower()
+    is_jpeg = file_path.endswith(('.jpg', '.jpeg'))
+    is_png = file_path.endswith('.png')
+    is_raw = not (is_jpeg or is_png)
+    
+    # Pour les fichiers raw, les dimensions sont obligatoires
+    if is_raw:
+        if img_config[CONF_WIDTH] <= 0 or img_config[CONF_HEIGHT] <= 0:
+            raise cv.Invalid("Width and height must be specified for raw bitmap files")
+        
+        # Vérifier les limites de taille pour raw
+        if img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] > 1024 * 768:
+            raise cv.Invalid("Raw image dimensions too large (max 1024x768)")
     
     # Auto-définir le type basé sur le format si pas défini
     if "type" not in img_config:
@@ -91,6 +105,10 @@ CONFIG_SCHEMA = cv.All(CONFIG_SCHEMA, validate_storage_config)
 SD_IMAGE_SCHEMA = cv.All(SD_IMAGE_SCHEMA, validate_image_config)
 
 async def to_code(config):
+    # Ajout des defines pour ESP32-P4
+    cg.add_platformio_option("lib_deps", ["https://github.com/espressif/esp-idf.git"])
+    cg.add_define("CONFIG_IDF_TARGET_ESP32P4")
+    
     # Création du composant principal
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
@@ -114,13 +132,15 @@ async def to_code(config):
         cg.add_define("USE_SD_IMAGE")
 
 async def process_sd_image_config(img_config, storage_component):
-    # IMPORTANT: Création ET enregistrement du composant image
+    # Création ET enregistrement du composant image
     img_var = cg.new_Pvariable(img_config[CONF_ID])
     await cg.register_component(img_var, img_config)
 
     # Configuration de base
     cg.add(img_var.set_storage_component(storage_component))
     cg.add(img_var.set_file_path(img_config[CONF_FILE_PATH]))
+    
+    # Configuration des dimensions (0 = autodétection pour JPEG/PNG)
     cg.add(img_var.set_width(img_config[CONF_WIDTH]))
     cg.add(img_var.set_height(img_config[CONF_HEIGHT]))
 
@@ -136,27 +156,27 @@ async def process_sd_image_config(img_config, storage_component):
     cg.add(img_var.set_cache_enabled(img_config[CONF_CACHE_ENABLED]))
     cg.add(img_var.set_preload(img_config[CONF_PRELOAD]))
 
-    # Calcul de la taille des données (utilisation des clés minuscules)
-    format_sizes = {
-        "rgb565": 2,
-        "rgb888": 3,
-        "rgba": 4,
-        "grayscale": 1,
-        "binary": 1,
-    }
+    # Calcul de la taille des données seulement pour les fichiers raw
+    if img_config[CONF_WIDTH] > 0 and img_config[CONF_HEIGHT] > 0:
+        format_sizes = {
+            "rgb565": 2,
+            "rgb888": 3,
+            "rgba": 4,
+            "grayscale": 1,
+            "binary": 1,
+        }
 
-    format_key = img_config[CONF_FORMAT]  # Déjà en minuscules
-    if format_key == "binary":
-        data_size = (img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] + 7) // 8
-    else:
-        data_size = img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] * format_sizes[format_key]
+        format_key = img_config[CONF_FORMAT]
+        if format_key == "binary":
+            data_size = (img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] + 7) // 8
+        else:
+            data_size = img_config[CONF_WIDTH] * img_config[CONF_HEIGHT] * format_sizes[format_key]
 
-    cg.add(img_var.set_expected_data_size(data_size))
+        cg.add(img_var.set_expected_data_size(data_size))
     
-    # IMPORTANT: Enregistrer comme image pour ESPHome
+    # Enregistrer comme image pour ESPHome
     cg.add_global(cg.RawStatement(f"// Register {img_config[CONF_ID].id} as image"))
     
-    # CRUCIAL: Retourner la variable pour que ESPHome puisse la suivre
     return img_var
 
 @automation.register_action(
@@ -188,7 +208,6 @@ async def sd_image_unload_to_code(config, action_id, template_arg, args):
     parent = await cg.get_variable(config[CONF_ID])
     cg.add(var.set_parent(parent))
     return var
-
 
 
 
