@@ -6,7 +6,8 @@
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/optional.h"
-#include "esphome/components/image/image.h"  // Image ESPHome
+#include "esphome/components/image/image.h"
+#include "esphome/components/display/display.h"
 #include "../sd_mmc_card/sd_mmc_card.h"
 
 namespace esphome {
@@ -15,7 +16,7 @@ namespace storage {
 // Forward declarations
 class StorageComponent;
 
-// Utiliser l'enum ImageType de ESPHome ou le définir si nécessaire
+// Utiliser l'enum ImageType de ESPHome
 using ImageType = image::ImageType;
 
 // Énumérations pour les formats d'image
@@ -64,7 +65,7 @@ class StorageComponent : public Component {
   size_t cache_size_{0};
 };
 
-// Classe pour les images SD - HÉRITE DE display::BaseImage (Image ESPHome)
+// Classe pour les images SD - HÉRITE CORRECTEMENT de display::BaseImage
 class SdImageComponent : public Component, public display::BaseImage {
  public:
   SdImageComponent() = default;
@@ -118,7 +119,7 @@ class SdImageComponent : public Component, public display::BaseImage {
   void unload_image();
   bool reload_image();
   
-  // Accès aux pixels (exemples)
+  // Accès aux pixels
   void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const;
   void get_pixel(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const; 
   const uint8_t *get_data() const { return this->image_data_.data(); }
@@ -168,7 +169,14 @@ class SdImageComponent : public Component, public display::BaseImage {
   int width_override_{0};
   int height_override_{0};
   
-  // Méthodes privées (à implémenter dans le .cpp)
+  // Méthodes de décodage d'images
+  bool is_jpeg_file(const std::vector<uint8_t> &data);
+  bool is_png_file(const std::vector<uint8_t> &data);
+  bool decode_jpeg(const std::vector<uint8_t> &jpeg_data);
+  bool decode_png(const std::vector<uint8_t> &png_data);
+  bool load_raw_data(const std::vector<uint8_t> &raw_data);
+  
+  // Méthodes privées
   bool read_image_from_storage();
   void convert_byte_order(std::vector<uint8_t> &data);
   void convert_pixel_format(int x, int y, const uint8_t *pixel_data, 
@@ -223,32 +231,8 @@ template<typename... Ts> class SdImageUnloadAction : public Action<Ts...> {
   SdImageComponent *parent_{nullptr};
 };
 
-// ---------- Implémentation de load_image_from_path (dans storage.cpp) ----------
-inline bool SdImageComponent::load_image_from_path(const std::string &path) {
-  ESP_LOGD("SdImageComponent", "Loading image from: %s", path.c_str());
-
-  image::Image decoded_img;
-  if (!decoded_img.load_file(path.c_str())) {
-    ESP_LOGE("SdImageComponent", "Failed to load image: %s", path.c_str());
-    return false;
-  }
-
-  this->width_ = decoded_img.get_width();
-  this->height_ = decoded_img.get_height();
-
-  // Copie les données RGB (ou autres formats)
-  const auto &data = decoded_img.get_data();
-  this->image_data_.assign(data.begin(), data.end());
-
-  this->is_loaded_ = true;
-  ESP_LOGI("SdImageComponent", "Image loaded %dx%d (%zu bytes)", this->width_, this->height_, this->image_data_.size());
-
-  return true;
-}
-
 }  // namespace storage
 }  // namespace esphome
-
 
 
 
