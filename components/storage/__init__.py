@@ -2,7 +2,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.const import CONF_ID, CONF_PLATFORM, CONF_WIDTH, CONF_HEIGHT, CONF_FORMAT
 from esphome import automation
-from esphome.components import display
+from esphome.components import display, image
 
 DEPENDENCIES = ['sd_mmc_card', 'display']
 CODEOWNERS = ["@youkorr"]
@@ -10,6 +10,7 @@ CODEOWNERS = ["@youkorr"]
 # Configuration constants
 CONF_STORAGE = "storage"
 CONF_PATH = "path"
+CONF_ROOT_PATH = "root_path"
 
 # Constants pour SD direct
 CONF_SD_COMPONENT = "sd_component"
@@ -17,11 +18,22 @@ CONF_SD_COMPONENT = "sd_component"
 # Constants pour les images SD
 CONF_SD_IMAGES = "sd_images"
 CONF_FILE_PATH = "file_path"
+CONF_BYTE_ORDER = "byte_order"
 
 storage_ns = cg.esphome_ns.namespace('storage')
 StorageComponent = storage_ns.class_('StorageComponent', cg.Component)
-# Fix: Use display.DisplayBuffer.BaseImage or create without inheritance
-SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component)
+
+# CORRECTION: Utiliser image.Image_ au lieu de cg.display.BaseImage
+try:
+    # Essayer d'abord avec image.Image_
+    SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, image.Image_)
+except AttributeError:
+    try:
+        # Fallback: essayer avec display.BaseImage
+        SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component, display.BaseImage)
+    except AttributeError:
+        # Fallback final: juste Component
+        SdImageComponent = storage_ns.class_('SdImageComponent', cg.Component)
 
 SdImageLoadAction = storage_ns.class_('SdImageLoadAction', automation.Action)
 SdImageUnloadAction = storage_ns.class_('SdImageUnloadAction', automation.Action)
@@ -33,6 +45,11 @@ IMAGE_FORMAT = {
     "rgba": "RGBA",
 }
 
+BYTE_ORDER = {
+    "little_endian": "LITTLE_ENDIAN",
+    "big_endian": "BIG_ENDIAN",
+}
+
 SD_IMAGE_SCHEMA = cv.Schema({
     cv.Required(CONF_ID): cv.declare_id(SdImageComponent),
     cv.Required(CONF_FILE_PATH): cv.string,
@@ -41,6 +58,8 @@ SD_IMAGE_SCHEMA = cv.Schema({
     cv.Optional(CONF_HEIGHT, default=0): cv.positive_int,
     # Format de sortie souhaité
     cv.Optional(CONF_FORMAT, default="rgb565"): cv.enum(IMAGE_FORMAT, lower=True),
+    # Ordre des bytes
+    cv.Optional(CONF_BYTE_ORDER, default="little_endian"): cv.enum(BYTE_ORDER, lower=True),
     # Ajouter le type pour la compatibilité LVGL
     cv.Optional("type"): cv.enum(IMAGE_FORMAT, upper=True),
 }).extend(cv.COMPONENT_SCHEMA)
@@ -49,6 +68,7 @@ CONFIG_SCHEMA = cv.Schema({
     cv.Required(CONF_PLATFORM): cv.one_of("sd_direct", lower=True),
     cv.Required(CONF_ID): cv.declare_id(StorageComponent),
     cv.Required(CONF_SD_COMPONENT): cv.use_id(cg.Component),
+    cv.Optional(CONF_ROOT_PATH, default="/"): cv.string,
     cv.Optional(CONF_SD_IMAGES, default=[]): cv.ensure_list(SD_IMAGE_SCHEMA),
 }).extend(cv.COMPONENT_SCHEMA)
 
@@ -103,6 +123,7 @@ async def to_code(config):
     
     # Configuration du composant
     cg.add(var.set_platform(config[CONF_PLATFORM]))
+    cg.add(var.set_root_path(config[CONF_ROOT_PATH]))
 
     # Récupération du composant SD
     sd_component = await cg.get_variable(config[CONF_SD_COMPONENT])
@@ -127,9 +148,16 @@ async def process_sd_image_config(img_config, storage_component):
     # Configuration du format de sortie souhaité
     format_str = IMAGE_FORMAT[img_config[CONF_FORMAT]]
     cg.add(img_var.set_output_format_string(format_str))
+    
+    # Configuration de l'ordre des bytes
+    byte_order_str = BYTE_ORDER[img_config[CONF_BYTE_ORDER]]
+    cg.add(img_var.set_byte_order_string(byte_order_str))
 
-    # Pas de taille attendue pour JPEG/PNG (sera déterminée après décodage)
-    # Pas de configuration des dimensions (autodétection)
+    # Configuration des dimensions si spécifiées (pour les fichiers raw)
+    if img_config[CONF_WIDTH] > 0:
+        cg.add(img_var.set_width_override(img_config[CONF_WIDTH]))
+    if img_config[CONF_HEIGHT] > 0:
+        cg.add(img_var.set_height_override(img_config[CONF_HEIGHT]))
     
     # Enregistrer comme image pour ESPHome
     cg.add_global(cg.RawStatement(f"// Register {img_config[CONF_ID].id} as image"))
