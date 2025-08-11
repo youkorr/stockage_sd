@@ -8,9 +8,12 @@
 #include "esphome/core/component.h"
 #include "esphome/core/automation.h"
 #include "esphome/core/optional.h"
-#include "esphome/components/image/image.h"
 #include "esphome/components/display/display.h"
-#include "../sd_mmc_card/sd_mmc_card.h"
+
+// Essayer d'inclure image si disponible
+#ifdef USE_IMAGE
+#include "esphome/components/image/image.h"
+#endif
 
 namespace esphome {
 namespace storage {
@@ -18,14 +21,16 @@ namespace storage {
 // Forward declarations
 class StorageComponent;
 
-// Utiliser l'enum ImageType de ESPHome
-using ImageType = image::ImageType;
-
 // Énumérations pour les formats d'image (JPEG/PNG uniquement)
 enum class OutputImageFormat {
   rgb565,
   rgb888,
   rgba
+};
+
+enum class ByteOrder {
+  little_endian,
+  big_endian
 };
 
 // Classe principale Storage (simplifiée)
@@ -40,7 +45,8 @@ class StorageComponent : public Component {
   
   // Configuration
   void set_platform(const std::string &platform) { this->platform_ = platform; }
-  void set_sd_component(sd_mmc_card::SdMmc *sd_component) { this->sd_component_ = sd_component; }
+  void set_root_path(const std::string &root_path) { this->root_path_ = root_path; }
+  void set_sd_component(Component *sd_component) { this->sd_component_ = sd_component; }
   
   // Méthodes de fichier
   bool file_exists_direct(const std::string &path);
@@ -50,16 +56,17 @@ class StorageComponent : public Component {
   
   // Getters
   const std::string &get_platform() const { return this->platform_; }
-  sd_mmc_card::SdMmc *get_sd_component() const { return this->sd_component_; }
+  const std::string &get_root_path() const { return this->root_path_; }
+  Component *get_sd_component() const { return this->sd_component_; }
   
  private:
   std::string platform_;
-  sd_mmc_card::SdMmc *sd_component_{nullptr};
-  
+  std::string root_path_{"/");
+  Component *sd_component_{nullptr};
 };
 
-// FIXED: Inherit from display::BaseImage correctly
-class SdImageComponent : public Component, public display::BaseImage {
+// CORRECTION: Hériter seulement de Component pour éviter les problèmes
+class SdImageComponent : public Component {
  public:
   SdImageComponent() = default;
 
@@ -72,23 +79,25 @@ class SdImageComponent : public Component, public display::BaseImage {
   void set_file_path(const std::string &path) { this->file_path_ = path; }
   void set_output_format(OutputImageFormat format) { this->output_format_ = format; }
   void set_output_format_string(const std::string &format);
+  void set_byte_order_string(const std::string &byte_order);
   void set_storage_component(StorageComponent *storage) { this->storage_component_ = storage; }
+  void set_width_override(int width) { this->width_override_ = width; }
+  void set_height_override(int height) { this->height_override_ = height; }
   
   // Getters
   const std::string &get_file_path() const { return this->file_path_; }
-  int get_width() const override { return this->width_; }
-  int get_height() const override { return this->height_; }
+  int get_width() const { return this->width_; }
+  int get_height() const { return this->height_; }
   OutputImageFormat get_output_format() const { return this->output_format_; }
   bool is_loaded() const { return this->is_loaded_; }
   
-  // Méthodes héritées de display::BaseImage
-  void draw(int x, int y, display::Display *display, Color color_on, Color color_off) override;
+  // Méthodes de drawing compatibles avec ESPHome display
+  void draw(int x, int y, display::Display *display, Color color_on, Color color_off);
   
   // Accès aux données image
   const uint8_t *get_data_start() const { 
     return this->image_data_.empty() ? nullptr : this->image_data_.data(); 
   }
-  ImageType get_image_type() const;
   
   // Chargement/déchargement d'image (simplifié)
   bool load_image();
@@ -139,7 +148,10 @@ class SdImageComponent : public Component, public display::BaseImage {
   std::string file_path_;
   int width_{0};
   int height_{0};
+  int width_override_{0};
+  int height_override_{0};
   OutputImageFormat output_format_{OutputImageFormat::rgb565};
+  ByteOrder byte_order_{ByteOrder::little_endian};
   
   // État
   bool is_loaded_{false};
@@ -151,6 +163,7 @@ class SdImageComponent : public Component, public display::BaseImage {
   bool is_png_file(const std::vector<uint8_t> &data) const;
   bool decode_jpeg(const std::vector<uint8_t> &jpeg_data);
   bool decode_png(const std::vector<uint8_t> &png_data);
+  bool load_raw_data(const std::vector<uint8_t> &raw_data);
   
   // Méthodes privées pour l'extraction de métadonnées
   bool extract_jpeg_dimensions(const std::vector<uint8_t> &data, int &width, int &height) const;
@@ -161,14 +174,24 @@ class SdImageComponent : public Component, public display::BaseImage {
                            uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const;
   size_t get_pixel_size() const;
   size_t get_pixel_offset(int x, int y) const;
+  void convert_byte_order(std::vector<uint8_t> &data);
   
   bool validate_dimensions() const;
   bool validate_file_path() const;
   bool validate_pixel_access(int x, int y) const;
+  size_t calculate_expected_size() const;
   
   // Méthodes utilitaires
   std::string detect_file_type(const std::string &path) const;
   bool is_supported_format(const std::string &extension) const;
+  std::string get_format_string() const;
+  
+  // Méthodes streaming et cache
+  void get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue) const;
+  void get_pixel_streamed(int x, int y, uint8_t &red, uint8_t &green, uint8_t &blue, uint8_t &alpha) const;
+  void free_cache();
+  bool read_image_from_storage();
+  size_t get_memory_usage() const { return this->image_data_.size(); }
 };
 
 // Actions pour l'automatisation avec gestion d'erreurs améliorée
