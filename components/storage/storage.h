@@ -58,7 +58,7 @@ class StorageComponent : public Component {
   
 };
 
-// Classe pour les images SD - HÉRITE CORRECTEMENT de display::BaseImage
+// FIXED: Inherit from display::BaseImage correctly
 class SdImageComponent : public Component, public display::BaseImage {
  public:
   SdImageComponent() = default;
